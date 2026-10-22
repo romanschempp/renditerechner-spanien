@@ -1,0 +1,509 @@
+import { irr, type Flow } from './irr';
+import { balanceAfter, buildSchedule, rateFunction, sumMonths, type LoanSchedule } from './loan';
+import type { Inputs, ScenarioKey } from './types';
+
+/** Gesetzlich fester Einbehalt durch den Käufer bei Verkauf durch Nichtresidenten. */
+export const NON_RESIDENT_RETENTION = 0.03;
+export const MAX_YEARS = 40;
+
+const pct = (v: number) => v / 100;
+const safeDiv = (a: number, b: number): number | null => (b > 0 ? a / b : null);
+
+// ---------------------------------------------------------------- Kauf
+
+export interface PurchaseBreakdown {
+  price: number;
+  itp: number;
+  iva: number;
+  ajd: number;
+  taxes: number;
+  fees: {
+    notary: number;
+    gestoria: number;
+    lawyer: number;
+    valuation: number;
+    bankFees: number;
+    buyerAgent: number;
+    lifeInsurance: number;
+    other: number;
+  };
+  feesTotal: number;
+  /** alle Kaufnebenkosten inkl. Steuern */
+  ancillary: number;
+  renovation: number;
+  totalInvestment: number;
+}
+
+export function purchaseCosts(i: Inputs): PurchaseBreakdown {
+  const p = i.purchase;
+  const renovation = i.renovation.items.reduce((s, it) => s + (it.amount || 0), 0);
+  const zeroFees = { notary: 0, gestoria: 0, lawyer: 0, valuation: 0, bankFees: 0, buyerAgent: 0, lifeInsurance: 0, other: 0 };
+
+  if (p.costMode === 'quick') {
+    const ancillary = p.price * pct(p.quickCostsPct);
+    return {
+      price: p.price, itp: 0, iva: 0, ajd: 0, taxes: 0, fees: zeroFees, feesTotal: 0,
+      ancillary, renovation, totalInvestment: p.price + ancillary + renovation,
+    };
+  }
+
+  const itp = p.propertyType === 'used' ? p.price * pct(p.itpPct) : 0;
+  const iva = p.propertyType === 'new' ? p.price * pct(p.ivaPct) : 0;
+  const ajd = p.propertyType === 'new' ? p.price * pct(p.ajdPct) : 0;
+  const fees = {
+    notary: p.notary, gestoria: p.gestoria, lawyer: p.lawyer, valuation: p.valuation,
+    bankFees: p.bankFees, buyerAgent: p.buyerAgent, lifeInsurance: p.lifeInsurance, other: p.other,
+  };
+  const feesTotal = Object.values(fees).reduce((s, v) => s + (v || 0), 0);
+  const taxes = itp + iva + ajd;
+  const ancillary = taxes + feesTotal;
+  return { price: p.price, itp, iva, ajd, taxes, fees, feesTotal, ancillary, renovation, totalInvestment: p.price + ancillary + renovation };
+}
+
+// ---------------------------------------------------------------- Kapital & Kredit
+
+export interface Capital {
+  totalInvestment: number;
+  loan: number;
+  equity: number;
+  /** Anteil Fremdkapital an der Gesamtinvestition */
+  debtRatio: number;
+  equityRatio: number;
+}
+
+export function loanAmount(i: Inputs): number {
+  const f = i.financing;
+  if (!f.enabled) return 0;
+  return Math.max(0, f.amountMode === 'eur' ? f.amount : i.purchase.price * pct(f.amountPct));
+}
+
+export function capital(i: Inputs, purchase = purchaseCosts(i)): Capital {
+  const loan = loanAmount(i);
+  const ti = purchase.totalInvestment;
+  return {
+    totalInvestment: ti,
+    loan,
+    equity: ti - loan,
+    debtRatio: ti > 0 ? loan / ti : 0,
+    equityRatio: ti > 0 ? (ti - loan) / ti : 0,
+  };
+}
+
+export function schedule(i: Inputs): LoanSchedule {
+  const f = i.financing;
+  return buildSchedule({
+    amount: loanAmount(i),
+    repayment: f.repayment,
+    termMode: f.termMode,
+    termYears: f.termYears,
+    targetPct: f.targetPct,
+    targetYears: f.targetYears,
+    rateForYear: rateFunction(f),
+  });
+}
+
+// ---------------------------------------------------------------- Jahreswerte
+
+export interface CostBreakdown {
+  management: number;
+  maintenance: number;
+  community: number;
+  ibi: number;
+  waste: number;
+  insurance: number;
+  reserve: number;
+  nonRecoverable: number;
+  taxAdvice: number;
+  other: number;
+}
+export type CostKey = keyof CostBreakdown;
+export const COST_KEYS: CostKey[] = [
+  'management', 'maintenance', 'community', 'ibi', 'waste', 'insurance', 'reserve', 'nonRecoverable', 'taxAdvice', 'other',
+];
+
+export interface YearRow {
+  year: number;
+  /** 1 = volles Jahr, < 1 = angebrochenes letztes Jahr */
+  fraction: number;
+  monthlyRent: number;
+  potentialRent: number;
+  vacancyLoss: number;
+  effectiveRent: number;
+  costs: CostBreakdown;
+  opCosts: number;
+  noi: number;
+  interest: number;
+  principal: number;
+  debtService: number;
+  tax: number;
+  /** Steuer ohne Zinsabzug (für die GK-Rendite) */
+  taxUnlevered: number;
+  capex: number;
+  cashflow: number;
+  cumCashflow: number;
+  balance: number;
+  propertyValue: number;
+  equityInProperty: number;
+  ekReturn: number | null;
+  gkReturn: number | null;
+  cashOnCash: number | null;
+  dscr: number | null;
+}
+
+export interface RowOptions {
+  valueGrowthPct: number;
+  /** ersetzt die Monatsmiete in Jahr 1 (für die Break-even-Suche) */
+  rentOverride?: number;
+}
+
+export function vacancyRate(i: Inputs): number {
+  const r = i.rental;
+  const v = r.vacancyMode === 'pct' ? pct(r.vacancyPct) : r.vacancyMonths / 12;
+  return Math.min(1, Math.max(0, v));
+}
+
+export function computeRows(
+  i: Inputs,
+  horizon: number,
+  opts: RowOptions,
+  sched = schedule(i),
+  cap = capital(i),
+): YearRow[] {
+  const r = i.rental;
+  const gRent = pct(r.growthMode === 'single' ? r.growthPct : r.rentGrowthPct);
+  const gCost = pct(r.growthMode === 'single' ? r.growthPct : r.costGrowthPct);
+  const vac = vacancyRate(i);
+  const taxRate = !i.excelLogic && i.tax.rentalTaxEnabled ? pct(i.tax.rentalTaxPct) : 0;
+  const price = i.purchase.price;
+
+  const rows: YearRow[] = [];
+  const nYears = Math.max(1, Math.ceil(horizon - 1e-9));
+  let monthly = 0;
+  let cum = 0;
+
+  for (let y = 1; y <= nYears; y++) {
+    const frac = Math.min(1, horizon - (y - 1));
+    const manual = r.manualRent[y - 1];
+    if (y === 1) monthly = opts.rentOverride ?? (manual != null ? manual : r.monthlyRent);
+    else monthly = manual != null ? manual : monthly * (1 + gRent);
+
+    const potentialRent = monthly * 12 * frac;
+    const effectiveRent = potentialRent * (1 - vac);
+    const cf = Math.pow(1 + gCost, y - 1) * frac;
+    const costs: CostBreakdown = {
+      management: effectiveRent * pct(r.managementPct),
+      maintenance: effectiveRent * pct(r.maintenancePct),
+      community: r.communityMonthly * 12 * cf,
+      ibi: r.ibi * cf,
+      waste: r.waste * cf,
+      insurance: r.insurance * cf,
+      reserve: r.reserve * cf,
+      nonRecoverable: r.nonRecoverable * cf,
+      taxAdvice: r.taxAdvice * cf,
+      other: r.other * cf,
+    };
+    const opCosts = COST_KEYS.reduce((s, k) => s + costs[k], 0);
+    const noi = effectiveRent - opCosts;
+
+    const startMonth = (y - 1) * 12;
+    const endMonth = Math.round(startMonth + frac * 12);
+    const { interest, principal } = sumMonths(sched, startMonth + 1, endMonth);
+    const balance = balanceAfter(sched, endMonth);
+
+    const tax = taxRate * Math.max(0, noi - interest);
+    const taxUnlevered = taxRate * Math.max(0, noi);
+    const capex = i.renovation.later.filter((l) => l.year === y).reduce((s, l) => s + (l.amount || 0), 0);
+    // Excel-Logik: Tilgung wird nicht abgezogen
+    const cashflow = i.excelLogic ? noi - interest - capex : noi - interest - principal - tax - capex;
+    cum += cashflow;
+
+    const t = y - 1 + frac;
+    const propertyValue = price * Math.pow(1 + pct(opts.valueGrowthPct), t);
+    const debtService = interest + principal;
+    rows.push({
+      year: y, fraction: frac, monthlyRent: monthly, potentialRent, vacancyLoss: potentialRent - effectiveRent, effectiveRent,
+      costs, opCosts, noi, interest, principal, debtService, tax, taxUnlevered, capex, cashflow, cumCashflow: cum,
+      balance, propertyValue, equityInProperty: propertyValue - balance,
+      ekReturn: safeDiv(noi - interest - tax, cap.equity * frac),
+      gkReturn: safeDiv(noi - taxUnlevered, cap.totalInvestment * frac),
+      cashOnCash: safeDiv(cashflow, cap.equity * frac),
+      dscr: debtService > 0 ? noi / debtService : null,
+    });
+  }
+  return rows;
+}
+
+// ---------------------------------------------------------------- Kennzahlen Jahr 1
+
+export interface BaseKpis {
+  purchase: PurchaseBreakdown;
+  capital: Capital;
+  schedule: LoanSchedule;
+  monthlyPayment: number;
+  year1: YearRow;
+  grossYield: number | null;
+  netYield: number | null;
+  vacancyRate: number;
+  breakEvenRent: number | null;
+}
+
+export function year1Cashflow(i: Inputs, rent: number, sched = schedule(i), cap = capital(i)): number {
+  return computeRows(i, 1, { valueGrowthPct: 0, rentOverride: rent }, sched, cap)[0].cashflow;
+}
+
+/** Monatliche Kaltmiete, bei der der Cashflow in Jahr 1 genau 0 ist. */
+export function breakEvenRent(i: Inputs, sched = schedule(i), cap = capital(i)): number | null {
+  let lo = 0;
+  let hi = Math.max(10000, i.rental.monthlyRent * 20);
+  if (year1Cashflow(i, lo, sched, cap) >= 0) return 0;
+  if (year1Cashflow(i, hi, sched, cap) < 0) return null;
+  for (let k = 0; k < 100; k++) {
+    const mid = (lo + hi) / 2;
+    if (year1Cashflow(i, mid, sched, cap) < 0) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+
+export function baseKpis(i: Inputs): BaseKpis {
+  const purchase = purchaseCosts(i);
+  const cap = capital(i, purchase);
+  const sched = schedule(i);
+  const year1 = computeRows(i, 1, { valueGrowthPct: 0 }, sched, cap)[0];
+  return {
+    purchase,
+    capital: cap,
+    schedule: sched,
+    monthlyPayment: sched.firstPayment,
+    year1,
+    grossYield: safeDiv(i.rental.monthlyRent * 12, i.purchase.price),
+    netYield: safeDiv(year1.noi, cap.totalInvestment),
+    vacancyRate: vacancyRate(i),
+    breakEvenRent: breakEvenRent(i, sched, cap),
+  };
+}
+
+// ---------------------------------------------------------------- Rechner A: langfristig vermieten
+
+export interface RentResult {
+  horizon: number;
+  rows: YearRow[];
+  /** Jahr (mit Nachkommastellen), in dem die kumulierten Cashflows das EK zurückgezahlt haben */
+  paybackYear: number | null;
+  totalCashflow: number;
+  endValue: number;
+  endBalance: number;
+  endEquity: number;
+  /** Cashflows + Eigenkapitalanteil am Ende − eingesetztes EK (Wert nicht realisiert) */
+  totalGain: number;
+  irrEquity: number | null;
+  irrTotal: number | null;
+  multiple: number | null;
+  avgNoiOnPrice: number | null;
+  avgNoiOnInvestment: number | null;
+}
+
+export function defaultHorizon(i: Inputs, sched = schedule(i)): number {
+  if (i.rentOnly.horizonYears != null) return Math.min(MAX_YEARS, Math.max(1, i.rentOnly.horizonYears));
+  if (i.financing.enabled && sched.months.length > 0) return Math.min(MAX_YEARS, Math.ceil(sched.termMonths / 12 - 1e-9));
+  return 20;
+}
+
+export function rentCalculator(i: Inputs): RentResult {
+  const purchase = purchaseCosts(i);
+  const cap = capital(i, purchase);
+  const sched = schedule(i);
+  const horizon = defaultHorizon(i, sched);
+  const rows = computeRows(i, horizon, { valueGrowthPct: i.rentOnly.valueGrowthPct }, sched, cap);
+  const last = rows[rows.length - 1];
+
+  let paybackYear: number | null = null;
+  if (cap.equity <= 0) paybackYear = 0;
+  else {
+    let prev = 0;
+    for (const row of rows) {
+      if (row.cumCashflow >= cap.equity) {
+        paybackYear = row.year - 1 + (cap.equity - prev) / (row.cumCashflow - prev);
+        break;
+      }
+      prev = row.cumCashflow;
+    }
+  }
+
+  const totalCashflow = last.cumCashflow;
+  const endEquity = last.propertyValue - last.balance;
+  const eqFlows: Flow[] = [{ t: 0, amount: -cap.equity }, ...rows.map((r) => ({ t: r.year - 1 + r.fraction, amount: r.cashflow }))];
+  eqFlows[eqFlows.length - 1] = { ...eqFlows[eqFlows.length - 1], amount: eqFlows[eqFlows.length - 1].amount + endEquity };
+  const gkFlows: Flow[] = [
+    { t: 0, amount: -cap.totalInvestment },
+    ...rows.map((r) => ({ t: r.year - 1 + r.fraction, amount: r.noi - r.taxUnlevered - r.capex })),
+  ];
+  gkFlows[gkFlows.length - 1] = { ...gkFlows[gkFlows.length - 1], amount: gkFlows[gkFlows.length - 1].amount + last.propertyValue };
+  const avgNoi = rows.reduce((s, r) => s + r.noi, 0) / horizon;
+
+  return {
+    horizon,
+    rows,
+    paybackYear,
+    totalCashflow,
+    endValue: last.propertyValue,
+    endBalance: last.balance,
+    endEquity,
+    totalGain: totalCashflow + endEquity - cap.equity,
+    irrEquity: cap.equity > 0 ? irr(eqFlows) : null,
+    irrTotal: irr(gkFlows),
+    multiple: safeDiv(totalCashflow + endEquity, cap.equity),
+    avgNoiOnPrice: safeDiv(avgNoi, i.purchase.price),
+    avgNoiOnInvestment: safeDiv(avgNoi, cap.totalInvestment),
+  };
+}
+
+// ---------------------------------------------------------------- Rechner B: kaufen und verkaufen
+
+export interface SaleResult {
+  scenario: ScenarioKey;
+  holdYears: number;
+  rows: YearRow[];
+  salePrice: number;
+  agentFee: number;
+  prepaymentPenalty: number;
+  saleCosts: number;
+  balance: number;
+  capitalGain: number;
+  capitalGainsTax: number;
+  netProceeds: number;
+  /** 3 %-Einbehalt durch den Käufer bei Nichtresidenten */
+  retention: number;
+  /** Steuer − Einbehalt: > 0 Nachzahlung, < 0 Erstattung */
+  retentionSettlement: number;
+  /** Auszahlung beim Notartermin (Liquidität im Verkaufsjahr) */
+  cashAtClosing: number;
+  sumCashflow: number;
+  rentalProfit: number;
+  saleProfit: number;
+  totalProfit: number;
+  irrEquity: number | null;
+  irrTotal: number | null;
+  multiple: number | null;
+  profitPerYearOnEquity: number | null;
+}
+
+export const SCENARIOS: ScenarioKey[] = ['pessimistic', 'realistic', 'optimistic'];
+
+export function salePrice(i: Inputs, key: ScenarioKey): number {
+  const s = i.sale.scenarios[key];
+  if (i.sale.priceMode === 'direct') return s.price;
+  return i.purchase.price * Math.pow(1 + pct(s.growthPct), i.sale.holdYears);
+}
+
+export function saleCalculator(i: Inputs, key: ScenarioKey): SaleResult {
+  const purchase = purchaseCosts(i);
+  const cap = capital(i, purchase);
+  const sched = schedule(i);
+  const s = i.sale;
+  const hold = Math.min(MAX_YEARS, Math.max(1 / 12, s.holdYears));
+  const price = salePrice(i, key);
+  const growth = Math.pow(price / Math.max(1, i.purchase.price), 1 / hold) - 1;
+  const rows = computeRows(i, hold, { valueGrowthPct: growth * 100 }, sched, cap);
+
+  const balance = balanceAfter(sched, Math.round(hold * 12));
+  const agentFee = price * pct(s.agentPct);
+  const prepaymentPenalty = i.financing.enabled ? balance * pct(i.financing.prepaymentPenaltyPct) : 0;
+  const saleCostsUnlevered = agentFee + s.lawyer + s.plusvalia + s.preparation + s.openCommunity + s.other;
+  const saleCosts = saleCostsUnlevered + prepaymentPenalty;
+  const capexSum = rows.reduce((sum, r) => sum + r.capex, 0);
+
+  const capitalGain = price - saleCosts - cap.totalInvestment - capexSum;
+  const capitalGainsTax = Math.max(0, capitalGain) * pct(i.tax.capitalGainsTaxPct);
+  const netProceeds = price - saleCosts - capitalGainsTax - balance;
+  const retention = i.tax.nonResident ? price * NON_RESIDENT_RETENTION : 0;
+
+  const sumCashflow = rows.reduce((sum, r) => sum + r.cashflow, 0);
+  const rentalProfit = rows.reduce((sum, r) => sum + r.noi - r.interest - r.tax, 0);
+  const saleProfit = capitalGain - capitalGainsTax;
+  const totalProfit = rentalProfit + saleProfit;
+
+  const flows: Flow[] = [{ t: 0, amount: -cap.equity }];
+  const gkFlows: Flow[] = [{ t: 0, amount: -cap.totalInvestment }];
+  for (const r of rows) {
+    const t = r.year - 1 + r.fraction;
+    // Excel-Logik zieht die Tilgung im Cashflow nicht ab; für den IRR zählt der echte Zahlungsstrom.
+    flows.push({ t, amount: r.noi - r.interest - r.principal - r.tax - r.capex });
+    gkFlows.push({ t, amount: r.noi - r.taxUnlevered - r.capex });
+  }
+  flows.push({ t: hold, amount: netProceeds });
+  const gkGain = price - saleCostsUnlevered - cap.totalInvestment - capexSum;
+  gkFlows.push({ t: hold, amount: price - saleCostsUnlevered - Math.max(0, gkGain) * pct(i.tax.capitalGainsTaxPct) });
+
+  return {
+    scenario: key,
+    holdYears: hold,
+    rows,
+    salePrice: price,
+    agentFee,
+    prepaymentPenalty,
+    saleCosts,
+    balance,
+    capitalGain,
+    capitalGainsTax,
+    netProceeds,
+    retention,
+    retentionSettlement: i.tax.nonResident ? capitalGainsTax - retention : 0,
+    cashAtClosing: price - retention - saleCosts - balance,
+    sumCashflow,
+    rentalProfit,
+    saleProfit,
+    totalProfit,
+    irrEquity: cap.equity > 0 ? irr(flows) : null,
+    irrTotal: irr(gkFlows),
+    multiple: safeDiv(cap.equity + totalProfit, cap.equity),
+    profitPerYearOnEquity: safeDiv(totalProfit / hold, cap.equity),
+  };
+}
+
+// ---------------------------------------------------------------- Sensitivität
+
+export interface SensitivityRow {
+  key: 'rent' | 'rate' | 'price';
+  low: number | null;
+  base: number | null;
+  high: number | null;
+}
+
+function shiftRates(i: Inputs, deltaPct: number): Inputs {
+  const f = i.financing;
+  return {
+    ...i,
+    financing: {
+      ...f,
+      fixedRatePct: f.fixedRatePct + deltaPct,
+      marginPct: f.marginPct + deltaPct,
+    },
+  };
+}
+
+function scaleRent(i: Inputs, factor: number): Inputs {
+  return {
+    ...i,
+    rental: {
+      ...i.rental,
+      monthlyRent: i.rental.monthlyRent * factor,
+      manualRent: i.rental.manualRent.map((m) => (m == null ? m : m * factor)),
+    },
+  };
+}
+
+function scalePrice(i: Inputs, factor: number): Inputs {
+  return { ...i, purchase: { ...i.purchase, price: i.purchase.price * factor } };
+}
+
+/** EK-Rendite in Jahr 1 bei Miete ±10 %, Zins ±1 Prozentpunkt, Kaufpreis ±5 %. */
+export function sensitivity(i: Inputs): SensitivityRow[] {
+  const ek = (x: Inputs) => baseKpis(x).year1.ekReturn;
+  const base = ek(i);
+  return [
+    { key: 'rent', low: ek(scaleRent(i, 0.9)), base, high: ek(scaleRent(i, 1.1)) },
+    { key: 'rate', low: ek(shiftRates(i, -1)), base, high: ek(shiftRates(i, 1)) },
+    { key: 'price', low: ek(scalePrice(i, 0.95)), base, high: ek(scalePrice(i, 1.05)) },
+  ];
+}
