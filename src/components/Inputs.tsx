@@ -49,7 +49,7 @@ function PurchaseSection({ inputs, setInputs, kpis }: P) {
   const ratesHint = fill(t.purchase.ratesHint, { date: RATES_AS_OF });
 
   return (
-    <Section id="purchase" title={t.purchase.section} summary={eur(p.price + kpis.purchase.ancillary)} defaultOpen>
+    <Section id="purchase" title={t.purchase.section} summary={eur(p.price + kpis.purchase.ancillary)}>
       <NumberField label={t.purchase.price} value={p.price} onChange={(v) => set({ price: v })} unit="€" digits={2} min={0} wide />
       <div className="row">
         <Segmented
@@ -376,7 +376,7 @@ function RentalSection({ inputs, setInputs, kpis }: P) {
   const years = 10;
 
   return (
-    <Section id="rental" title={t.rental.section} summary={`${eur(r.monthlyRent)}${t.units.perMonthShort}`} defaultOpen>
+    <Section id="rental" title={t.rental.section} summary={`${eur(r.monthlyRent)}${t.units.perMonthShort}`}>
       <NumberField label={t.rental.rent} value={r.monthlyRent} onChange={(v) => set({ monthlyRent: v })} unit={t.units.perMonth} min={0} wide info={t.rental.rentLawHint} />
       <Switch
         checked={showManual}
@@ -480,7 +480,7 @@ function SaleSection({ inputs, setInputs }: { inputs: Inputs; setInputs: SetInpu
     set({ scenarios: { ...s.scenarios, [key]: { ...s.scenarios[key], ...part } } });
 
   return (
-    <Section id="sale" title={t.sale.section} summary={`${num(s.holdYears, 2)} ${t.units.years} · ${eur(salePrice(inputs, 'realistic'))}`} defaultOpen>
+    <Section id="sale" title={t.sale.section} summary={`${num(s.holdYears, 2)} ${t.units.years} · ${eur(salePrice(inputs, 'realistic'))}`}>
       <NumberField label={t.sale.hold} value={s.holdYears} onChange={(v) => set({ holdYears: v })} unit={t.units.years} min={0.1} max={MAX_YEARS} digits={2} wide />
       <div className="subhead">
         <span>{t.sale.priceMode} <InfoTip text={t.sale.scenarioHint} /></span>
@@ -533,7 +533,7 @@ function RentOnlySection({ inputs, setInputs, kpis }: { inputs: Inputs; setInput
   const auto = ro.horizonYears == null;
   const horizon = defaultHorizon(inputs, kpis.schedule);
   return (
-    <Section id="rentOnly" title={t.rentOnly.section} summary={`${horizon} ${t.units.years}`} defaultOpen>
+    <Section id="rentOnly" title={t.rentOnly.section} summary={`${horizon} ${t.units.years}`}>
       <Segmented size="sm" label={t.rentOnly.horizon} value={auto ? 'auto' : 'custom'}
         onChange={(v) => patch('rentOnly', { horizonYears: v === 'auto' ? null : horizon })}
         options={[{ value: 'auto', label: t.rentOnly.horizonAuto }, { value: 'custom', label: t.rentOnly.horizonCustom }]} />

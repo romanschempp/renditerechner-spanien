@@ -36,7 +36,7 @@ export function ResultPanel({ inputs, calc, kpis, computed }: { inputs: Inputs; 
       <Overview kpis={kpis} computed={computed} />
 
       {calc === 'sale' && computed.sales && (
-        <Section id="res.sale" title={fill(t.results.saleTitle, { years: num(sale!.holdYears, sale!.holdYears % 1 ? 1 : 0) })} defaultOpen level="panel">
+        <Section id="res.sale" title={fill(t.results.saleTitle, { years: num(sale!.holdYears, sale!.holdYears % 1 ? 1 : 0) })} level="panel">
           <SaleBreakdown sales={computed.sales} equity={kpis.capital.equity} nonResident={inputs.tax.nonResident} />
         </Section>
       )}

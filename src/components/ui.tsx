@@ -1,6 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useI18n } from '../i18n';
-import { usePref } from '../state/store';
 import { parseNumber } from './parse';
 
 export { parseNumber };
@@ -8,16 +7,16 @@ export { parseNumber };
 // ---------------------------------------------------------------- Accordion
 
 export function Section({
-  id, title, summary, children, defaultOpen = false, level = 'section',
+  title, summary, children, level = 'section',
 }: {
   id: string;
   title: string;
   summary?: ReactNode;
   children: ReactNode;
-  defaultOpen?: boolean;
   level?: 'section' | 'panel';
 }) {
-  const [open, setOpen] = usePref<boolean>(`open.${id}`, defaultOpen);
+  // Beim Öffnen der Seite sind alle Kästen zu – bewusst nicht gespeichert.
+  const [open, setOpen] = useState(false);
   const bodyId = useId();
   return (
     <section className={`acc acc--${level}${open ? ' is-open' : ''}`}>
