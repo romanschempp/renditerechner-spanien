@@ -21,8 +21,8 @@ Hinweis iCloud: `node_modules` ist ein Symlink auf `node_modules.nosync`, damit 
 
 ## Deployment (GitHub Pages)
 
-Jeder Push auf `main` startet `.github/workflows/deploy.yml`: Tests, Build mit `BASE_PATH=/<repo>/`, Veröffentlichung auf GitHub Pages.
-Adresse: `https://<github-user>.github.io/renditerechner-spanien/`. Die Daten bleiben pro Gerät im localStorage dieser Adresse.
+`npm run deploy` führt die Tests aus, baut mit `BASE_PATH=/renditerechner-spanien/` und schiebt `dist/` auf den Branch `gh-pages`.
+Adresse: https://romanschempp.github.io/renditerechner-spanien/ – die Daten bleiben pro Gerät im localStorage dieser Adresse.
 
 ## Aufbau
 
