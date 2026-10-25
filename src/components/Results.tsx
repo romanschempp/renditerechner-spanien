@@ -6,6 +6,7 @@ import {
 import { useI18n } from '../i18n';
 import type { Calc } from '../state/store';
 import { Charts } from './Charts';
+import { focusModel } from './focus';
 import { InfoTip, Note, Section, Signed } from './ui';
 
 export interface Computed {
@@ -65,64 +66,47 @@ export function ResultPanel({ inputs, calc, kpis, computed }: { inputs: Inputs; 
 // ---------------------------------------------------------------- Renditefeld
 
 function ReturnFocus({ calc, kpis, computed, excel }: { calc: Calc; kpis: BaseKpis; computed: Computed; excel: boolean }) {
-  const { t, eur, pct, fill, num } = useI18n();
-  const y = kpis.year1;
-  const cap = kpis.capital;
-  const ekNum = y.noi - y.interest - y.tax;
-  const gkNum = y.noi - y.taxUnlevered;
-  const lever = y.ekReturn != null && y.gkReturn != null ? (y.ekReturn - y.gkReturn) * 100 : null;
-  const leverTxt =
-    cap.loan <= 0 || lever == null
-      ? t.focus.leverNone
-      : fill(lever >= 0 ? t.focus.leverUp : t.focus.leverDown, { pp: num(Math.abs(lever), 1) });
-  const cfMonth = y.cashflow / 12;
-  const sale = computed.sales?.[1];
-
-  const items = [
-    {
-      key: 'ek', short: excel ? t.kpi.ekReturnExcel : t.focus.ekShort, long: t.focus.ekLong, what: t.focus.ekWhat,
-      value: y.ekReturn, num: ekNum, numLabel: excel ? t.focus.ekNumExcel : t.focus.ekNum, den: cap.equity, denLabel: t.focus.ekDen,
-      info: t.kpi.ekReturnSub,
-    },
-    {
-      key: 'gk', short: t.focus.gkShort, long: t.focus.gkLong, what: t.focus.gkWhat,
-      value: y.gkReturn, num: gkNum, numLabel: t.focus.gkNum, den: cap.totalInvestment, denLabel: t.focus.gkDen,
-      info: t.kpi.gkReturnSub,
-    },
-  ];
+  const i18n = useI18n();
+  const { t, eur, pct, fill } = i18n;
+  const m = focusModel(i18n, calc, kpis, computed.sales, excel);
+  const mode = calc === 'sale' ? `B · ${t.app.calcSale}` : `A · ${t.app.calcRent}`;
 
   return (
-    <section className="focus" aria-labelledby="focus-title">
-      <h2 className="focus__title" id="focus-title">{t.focus.title}</h2>
+    <section className={`focus focus--${calc}`} aria-labelledby="focus-title">
+      <p className="focus__mode">{mode}</p>
+      <h2 className="focus__title" id="focus-title">{m.title}</h2>
       <div className="focus__pair">
-        {items.map((it) => (
+        {m.items.map((it) => (
           <div key={it.key} className="ret">
             <p className="ret__name">
               <span className="ret__short">{it.short}</span>
               <span className="ret__long">{it.long}</span>
             </p>
             <p className={`ret__value${it.value != null && it.value < 0 ? ' is-neg' : ''}`}>{pct(it.value, 1)}</p>
+            {it.range && (
+              <p className="ret__range">{fill(t.focus.range, { low: pct(it.range[0], 1), high: pct(it.range[1], 1) })}</p>
+            )}
             <p className="ret__what">{it.what}</p>
-            <div className="frac" aria-label={`${it.numLabel} ÷ ${it.denLabel}`}>
-              <span className="frac__row"><span>{it.numLabel}</span><b>{eur(it.num)}</b></span>
-              <span className="frac__row frac__row--den"><span>÷ {it.denLabel}</span><b>{eur(it.den)}</b></span>
+            <div
+              className={`frac${it.fraction ? '' : ' frac--pair'}`}
+              aria-label={it.fraction ? `${it.rows[0].label} ÷ ${it.rows[1].label}` : undefined}
+            >
+              <span className="frac__row"><span>{it.rows[0].label}</span><b>{eur(it.rows[0].value)}</b></span>
+              <span className="frac__row frac__row--den">
+                <span>{it.fraction ? `÷ ${it.rows[1].label}` : it.rows[1].label}</span>
+                <b className={!it.fraction && it.rows[1].value < 0 ? 'is-neg' : undefined}>{eur(it.rows[1].value)}</b>
+              </span>
             </div>
           </div>
         ))}
       </div>
       <div className="focus__foot">
-        <p>{leverTxt}</p>
-        {calc === 'sale' && sale ? (
-          <p>
-            {fill(t.results.headlineSale, { years: num(sale.holdYears, sale.holdYears % 1 ? 1 : 0) })}
-            <b className={sale.totalProfit < 0 ? 'is-neg' : undefined}>{eur(sale.totalProfit)}</b>
-          </p>
-        ) : (
-          <p>
-            {t.focus.cashflowMonth}
-            <b className={cfMonth < 0 ? 'is-neg' : undefined}>{eur(cfMonth)}</b>
-          </p>
-        )}
+        <p>{m.lever}</p>
+        <p>
+          {m.footLabel}
+          <b className={m.footValue < 0 ? 'is-neg' : undefined}>{eur(m.footValue)}</b>
+        </p>
+        {m.year1Note && <p className="focus__year1">{m.year1Note}</p>}
       </div>
     </section>
   );

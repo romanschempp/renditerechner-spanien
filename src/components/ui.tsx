@@ -133,7 +133,7 @@ export function Segmented<T extends string>({
   value, options, onChange, label, size = 'md',
 }: {
   value: T;
-  options: { value: T; label: string }[];
+  options: { value: T; label: string; hint?: string }[];
   onChange: (v: T) => void;
   label: string;
   size?: 'sm' | 'md';
@@ -149,7 +149,14 @@ export function Segmented<T extends string>({
           className={`seg__opt${value === o.value ? ' is-on' : ''}`}
           onClick={() => onChange(o.value)}
         >
-          {o.label}
+          {o.hint ? (
+            <>
+              <span className="seg__label">{o.label}</span>
+              <span className="seg__hint">{o.hint}</span>
+            </>
+          ) : (
+            o.label
+          )}
         </button>
       ))}
     </div>

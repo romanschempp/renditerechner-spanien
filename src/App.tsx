@@ -22,7 +22,7 @@ export default function App() {
 type Store = ReturnType<typeof useStore>;
 
 function Shell({ store }: { store: Store }) {
-  const { t, eur, pct } = useI18n();
+  const { t, eur, pct, fill, num } = useI18n();
   const { state, current, setInputs } = store;
   const calc = state.calc;
   const inputs = current.inputs;
@@ -46,9 +46,10 @@ function Shell({ store }: { store: Store }) {
 
   const cfMonth = kpis.year1.cashflow / 12;
   const sale = computed.sales?.[1];
+  const holdYears = inputs.sale.holdYears;
 
   return (
-    <div className={`app app--tab-${tab}`}>
+    <div className={`app app--tab-${tab} app--calc-${calc}`}>
       <header className="top" ref={headerRef}>
         <div className="top__brand">
           <Tile />
@@ -75,32 +76,44 @@ function Shell({ store }: { store: Store }) {
         </div>
       </header>
 
-      <nav className="calc-switch" aria-label={t.app.title}>
+      <nav className="calc-switch" aria-label={t.app.calcLabel}>
         <Segmented<Calc>
-          label={t.app.title}
+          label={t.app.calcLabel}
           value={calc}
           onChange={store.setCalc}
           options={[
-            { value: 'rent', label: `A · ${t.app.calcRent}` },
-            { value: 'sale', label: `B · ${t.app.calcSale}` },
+            { value: 'rent', label: `A · ${t.app.calcRent}`, hint: t.app.calcRentHint },
+            { value: 'sale', label: `B · ${t.app.calcSale}`, hint: fill(t.app.calcSaleHint, { years: num(holdYears, holdYears % 1 ? 1 : 0) }) },
           ]}
         />
       </nav>
 
       <div className="peek" aria-live="polite">
-        <span>
-          {t.focus.ekShort} <b>{pct(kpis.year1.ekReturn, 1)}</b>
-        </span>
-        <span>
-          {t.focus.gkShort} <b>{pct(kpis.year1.gkReturn, 1)}</b>
-        </span>
-        <span>
-          {t.kpi.cashflow} <b className={cfMonth < 0 ? 'neg' : 'pos'}>{eur(cfMonth)}</b>{t.units.perMonthShort}
-        </span>
-        {sale && (
-          <span>
-            {t.kpi.profit} <b className={sale.totalProfit < 0 ? 'neg' : 'pos'}>{eur(sale.totalProfit)}</b>
-          </span>
+        <span className="peek__mode">{calc === 'sale' ? `B · ${t.app.calcSaleShort}` : `A · ${t.app.calcRentShort}`}</span>
+        {sale ? (
+          <>
+            <span>
+              {t.focus.peekEkSale} <b>{pct(sale.irrEquity, 1)}</b>
+            </span>
+            <span>
+              {t.focus.peekGkSale} <b>{pct(sale.irrTotal, 1)}</b>
+            </span>
+            <span>
+              {t.kpi.profit} <b className={sale.totalProfit < 0 ? 'neg' : 'pos'}>{eur(sale.totalProfit)}</b>
+            </span>
+          </>
+        ) : (
+          <>
+            <span>
+              {t.focus.ekShort} <b>{pct(kpis.year1.ekReturn, 1)}</b>
+            </span>
+            <span>
+              {t.focus.gkShort} <b>{pct(kpis.year1.gkReturn, 1)}</b>
+            </span>
+            <span>
+              {t.kpi.cashflow} <b className={cfMonth < 0 ? 'neg' : 'pos'}>{eur(cfMonth)}</b>{t.units.perMonthShort}
+            </span>
+          </>
         )}
       </div>
 

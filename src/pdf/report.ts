@@ -4,6 +4,7 @@ import { jsPDF } from 'jspdf';
 import { REGIONS, type BaseKpis, type Inputs, type RentResult, type SaleResult, type YearRow } from '../engine';
 import type { I18n } from '../i18n';
 import type { Calc } from '../state/store';
+import { focusModel } from '../components/focus';
 
 export interface ReportData {
   i18n: I18n;
@@ -186,57 +187,47 @@ function pageOne(pen: Pen, d: ReportData) {
 }
 
 function focusBlock(pen: Pen, d: ReportData, y0: number) {
-  const { t, eur, pct, fill, num } = d.i18n;
-  const y = d.kpis.year1;
-  const cap = d.kpis.capital;
+  const { t, eur, pct, fill } = d.i18n;
+  const m = focusModel(d.i18n, d.calc, d.kpis, d.sales, d.inputs.excelLogic);
   const h = 74;
   pen.fill(NAVY).rect(M, y0, CW, h);
   pen.fill(GOLD_LIGHT).rect(M, y0, CW, 1);
-  pen.font(SERIF, false, 10, GOLD_LIGHT).text(t.focus.title, M + 7, y0 + 9);
+  pen.font(SERIF, false, 10, GOLD_LIGHT).text(m.title, M + 7, y0 + 9);
 
-  const items = [
-    {
-      short: d.inputs.excelLogic ? t.kpi.ekReturnExcel : t.focus.ekShort, long: t.focus.ekLong, what: t.focus.ekWhat, value: y.ekReturn,
-      numLabel: d.inputs.excelLogic ? t.focus.ekNumExcel : t.focus.ekNum, numV: y.noi - y.interest - y.tax, denLabel: t.focus.ekDen, denV: cap.equity,
-    },
-    {
-      short: t.focus.gkShort, long: t.focus.gkLong, what: t.focus.gkWhat, value: y.gkReturn,
-      numLabel: t.focus.gkNum, numV: y.noi - y.taxUnlevered, denLabel: t.focus.gkDen, denV: cap.totalInvestment,
-    },
-  ];
   const colW = CW / 2;
-  items.forEach((it, k) => {
+  m.items.forEach((it, k) => {
     const x = M + k * colW + 7;
     const w = colW - 14;
     pen.font(SERIF, true, 13, WHITE).text(it.short, x, y0 + 18.5);
     const sw = pen.width(it.short);
     pen.font(SANS, false, 7.5, ON_NAVY_2).text(it.long, x + sw + 2.5, y0 + 18.5);
     pen.font(SERIF, false, 34, it.value != null && it.value < 0 ? NEG_ON_NAVY : WHITE).text(pct(it.value, 1), x - 0.6, y0 + 33);
+    const vw = pen.width(pct(it.value, 1));
+    if (it.range) {
+      pen.font(SANS, false, 7.5, GOLD_LIGHT).text(fill(t.focus.range, { low: pct(it.range[0], 1), high: pct(it.range[1], 1) }), x + vw + 3, y0 + 33);
+    }
     pen.font(SANS, false, 8, ON_NAVY_2);
     pen.wrap(it.what, w).slice(0, 2).forEach((line, i) => pen.text(line, x, y0 + 39.5 + i * 3.6));
-    // Bruch: Zähler, Goldlinie, Nenner
-    pen.font(SANS, false, 7.5, ON_NAVY_2).text(it.numLabel, x, y0 + 51);
-    pen.font(SERIF, true, 10, WHITE).text(eur(it.numV), x + w, y0 + 51, 'right');
-    pen.stroke(GOLD_LIGHT, 0.3).line(x, y0 + 53, x + w, y0 + 53);
-    pen.font(SANS, false, 7.5, ON_NAVY_2).text(`÷ ${it.denLabel}`, x, y0 + 57.5);
-    pen.font(SERIF, true, 10, WHITE).text(eur(it.denV), x + w, y0 + 57.5, 'right');
+    // Vermieten: Bruch mit Goldlinie. Verkaufen: Einsatz und Ergebnis.
+    const [a, b] = it.rows;
+    pen.font(SANS, false, 7.5, ON_NAVY_2).text(a.label, x, y0 + 51);
+    pen.font(SERIF, true, 10, WHITE).text(eur(a.value), x + w, y0 + 51, 'right');
+    pen.stroke(it.fraction ? GOLD_LIGHT : DIVIDER_ON_NAVY, 0.3).line(x, y0 + 53, x + w, y0 + 53);
+    pen.font(SANS, false, 7.5, ON_NAVY_2).text(it.fraction ? `÷ ${b.label}` : b.label, x, y0 + 57.5);
+    pen.font(SERIF, true, 10, !it.fraction && b.value < 0 ? NEG_ON_NAVY : WHITE).text(eur(b.value), x + w, y0 + 57.5, 'right');
   });
   pen.stroke(DIVIDER_ON_NAVY, 0.25).line(M + colW, y0 + 13, M + colW, y0 + 61);
   pen.line(M, y0 + 62, M + CW, y0 + 62);
 
-  const lever = y.ekReturn != null && y.gkReturn != null ? (y.ekReturn - y.gkReturn) * 100 : null;
-  const leverTxt =
-    cap.loan <= 0 || lever == null ? t.focus.leverNone : fill(lever >= 0 ? t.focus.leverUp : t.focus.leverDown, { pp: num(Math.abs(lever), 1) });
-  const sale = d.sales?.[1];
-  const [label, value] = d.calc === 'sale' && sale
-    ? [fill(t.results.headlineSale, { years: num(sale.holdYears, sale.holdYears % 1 ? 1 : 0) }), sale.totalProfit]
-    : [t.focus.cashflowMonth, y.cashflow / 12];
+  const label = m.footLabel;
+  const value = m.footValue;
   pen.font(SERIF, true, 11, value < 0 ? NEG_ON_NAVY : WHITE).text(eur(value), M + CW - 7, y0 + 69.5, 'right');
   const vw = pen.width(eur(value));
   pen.font(SANS, false, 8, ON_NAVY_2).text(label, M + CW - 7 - vw - 2.5, y0 + 69.5, 'right');
   const lw = pen.width(label);
   const room = CW - 14 - vw - lw - 10;
-  const leverLines = pen.wrap(leverTxt, room);
+  const withNote = m.year1Note ? pen.wrap(`${m.lever} ${m.year1Note}`, room) : [];
+  const leverLines = withNote.length && withNote.length <= 2 ? withNote : pen.wrap(m.lever, room);
   leverLines.slice(0, 2).forEach((line, i) => pen.text(line, M + 7, y0 + 69.5 - (leverLines.length > 1 ? 1.8 : 0) + i * 3.6));
 }
 
