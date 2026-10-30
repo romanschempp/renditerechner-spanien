@@ -21,6 +21,8 @@
   --brand-2: #0a3361;
   --brand-ink: #ffffff;
   --brand-soft: #e8edf3;
+  /* Schrift in Eingabefeldern: im hellen Modus blau, damit die Stellschrauben auffallen */
+  --input-ink: #1d4ed8;
   --accent: #997d63;
   --accent-soft: #f2ede8;
   --pos: #2b6a4c;
@@ -65,6 +67,7 @@
     --brand-2: #3a6399;
     --brand-ink: #ffffff;
     --brand-soft: #142c48;
+    --input-ink: var(--ink);
     --accent: #c2a68b;
     --accent-soft: #2a2420;
     --pos: #6cc298;
@@ -98,6 +101,7 @@
   --title: #e9edf2;
   --brand-2: #3a6399;
   --brand-soft: #142c48;
+  --input-ink: var(--ink);
   --accent: #c2a68b;
   --accent-soft: #2a2420;
   --pos: #6cc298;
@@ -515,6 +519,11 @@ button {
 .field__ctl input:focus-visible,
 .field__ctl select:focus-visible {
   outline: none;
+}
+input.num,
+.field__ctl--select select,
+.txt {
+  color: var(--input-ink);
 }
 .num {
   flex: 1 1 auto;
