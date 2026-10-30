@@ -48,6 +48,8 @@ export function blai30(): Inputs {
       prepaymentPenaltyPct: 0,
     },
     rental: {
+      enabled: true,
+      startDelayMonths: 0,
       monthlyRent: 1680,
       manualRent: [],
       vacancyMode: 'pct',
@@ -71,7 +73,10 @@ export function blai30(): Inputs {
     tax: {
       rentalTaxEnabled: true,
       rentalTaxPct: 19,
-      capitalGainsTaxPct: 21,
+      rentalReductionPct: 0,
+      landPct: 30,
+      cadastralLand: 0,
+      cadastralBuilding: 0,
       nonResident: false,
     },
     sale: {

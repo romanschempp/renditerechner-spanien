@@ -63,6 +63,10 @@ export interface FinancingInputs {
 }
 
 export interface RentalInputs {
+  /** false = nicht vermieten: keine Miete, keine Mietsteuer; feste Eigentümerkosten laufen weiter */
+  enabled: boolean;
+  /** Monate ohne Miete zu Beginn (Renovierung, Mietersuche) */
+  startDelayMonths: number;
   monthlyRent: number;
   /** optionale manuelle Monatsmiete je Jahr (Index 0 = Jahr 1) */
   manualRent: (number | null)[];
@@ -87,8 +91,15 @@ export interface RentalInputs {
 
 export interface TaxInputs {
   rentalTaxEnabled: boolean;
+  /** durchschnittlicher persönlicher IRPF-Satz auf die Mieteinkünfte */
   rentalTaxPct: number;
-  capitalGainsTaxPct: number;
+  /** Reducción auf positive Mieteinkünfte (Wohnraummiete), 0 = keine */
+  rentalReductionPct: number;
+  /** Bodenanteil in %, wenn keine Katasterwerte eingegeben sind */
+  landPct: number;
+  /** Valor catastral del suelo / de la construcción laut IBI-Bescheid (0 = nicht angegeben) */
+  cadastralLand: number;
+  cadastralBuilding: number;
   nonResident: boolean;
 }
 

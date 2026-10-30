@@ -6,8 +6,42 @@ import type { Inputs, ScenarioKey } from './types';
 export const NON_RESIDENT_RETENTION = 0.03;
 export const MAX_YEARS = 40;
 
+/** Amortización: 3 % p. a. auf den Gebäudewert ohne Boden (inkl. Renovierung/Mejoras). */
+export const DEPRECIATION_RATE = 0.03;
+/** IRPF-Sparbasis (base del ahorro), Stand 2026: Obergrenze des Tramo in € und Satz. */
+export const SAVINGS_BRACKETS: { upTo: number; rate: number }[] = [
+  { upTo: 6000, rate: 0.19 },
+  { upTo: 50000, rate: 0.21 },
+  { upTo: 200000, rate: 0.23 },
+  { upTo: 300000, rate: 0.27 },
+  { upTo: Infinity, rate: 0.3 },
+];
+/** IRNR: Nichtresidenten (EU/EWR) zahlen auf Veräußerungsgewinne pauschal 19 %. */
+export const NON_RESIDENT_GAINS_RATE = 0.19;
+/** Excel-Logik: pauschaler Satz der Excel „Simulación Blai 30“. */
+export const EXCEL_GAINS_RATE = 0.21;
+
 const pct = (v: number) => v / 100;
 const safeDiv = (a: number, b: number): number | null => (b > 0 ? a / b : null);
+
+/** Progressive Steuer der Sparbasis: jeder Tramo nur auf seinen Anteil. */
+export function savingsTax(gain: number): number {
+  let tax = 0;
+  let lower = 0;
+  for (const b of SAVINGS_BRACKETS) {
+    if (gain <= lower) break;
+    tax += (Math.min(gain, b.upTo) - lower) * b.rate;
+    lower = b.upTo;
+  }
+  return tax;
+}
+
+export function capitalGainsTax(i: Inputs, taxableGain: number): number {
+  if (taxableGain <= 0) return 0;
+  if (i.excelLogic) return taxableGain * EXCEL_GAINS_RATE;
+  if (i.tax.nonResident) return taxableGain * NON_RESIDENT_GAINS_RATE;
+  return savingsTax(taxableGain);
+}
 
 // ---------------------------------------------------------------- Kauf
 
@@ -58,6 +92,36 @@ export function purchaseCosts(i: Inputs): PurchaseBreakdown {
   const taxes = itp + iva + ajd;
   const ancillary = taxes + feesTotal;
   return { price: p.price, itp, iva, ajd, taxes, fees, feesTotal, ancillary, renovation, totalInvestment: p.price + ancillary + renovation };
+}
+
+// ---------------------------------------------------------------- Abschreibung
+
+export interface Depreciation {
+  /** Kaufpreis + Kaufsteuern und -nebenkosten (ohne Finanzierungskosten) */
+  acquisitionCost: number;
+  landShare: number;
+  /** Anschaffungskosten ohne Bodenanteil */
+  buildingFromCost: number;
+  /** maßgeblich: der höhere Wert aus Anschaffungskosten und Katasterwert, je ohne Boden */
+  building: number;
+  renovation: number;
+  base: number;
+  /** volle Jahresabschreibung ohne spätere Investitionen */
+  annual: number;
+}
+
+export function depreciation(i: Inputs, purchase = purchaseCosts(i)): Depreciation {
+  const x = i.tax;
+  const f = purchase.fees;
+  const acquisitionCost = i.purchase.costMode === 'quick'
+    ? purchase.price + purchase.ancillary
+    : purchase.price + purchase.taxes + f.notary + f.gestoria + f.lawyer + f.buyerAgent + f.other;
+  const cadastral = x.cadastralLand + x.cadastralBuilding;
+  const landShare = cadastral > 0 ? x.cadastralLand / cadastral : Math.min(1, Math.max(0, pct(x.landPct)));
+  const buildingFromCost = acquisitionCost * (1 - landShare);
+  const building = Math.max(buildingFromCost, x.cadastralBuilding);
+  const base = building + purchase.renovation;
+  return { acquisitionCost, landShare, buildingFromCost, building, renovation: purchase.renovation, base, annual: base * DEPRECIATION_RATE };
 }
 
 // ---------------------------------------------------------------- Kapital & Kredit
@@ -126,6 +190,8 @@ export interface YearRow {
   /** 1 = volles Jahr, < 1 = angebrochenes letztes Jahr */
   fraction: number;
   monthlyRent: number;
+  /** Monate mit Miete in diesem Jahr (ohne Anlaufzeit am Anfang) */
+  rentedMonths: number;
   potentialRent: number;
   vacancyLoss: number;
   effectiveRent: number;
@@ -135,6 +201,10 @@ export interface YearRow {
   interest: number;
   principal: number;
   debtService: number;
+  /** Amortización, anteilig nach vermieteten Monaten */
+  depreciation: number;
+  /** Mieteinnahmen − abzugsfähige Kosten − Zinsen − Abschreibung (kann negativ sein) */
+  taxBase: number;
   tax: number;
   /** Steuer ohne Zinsabzug (für die GK-Rendite) */
   taxUnlevered: number;
@@ -154,7 +224,12 @@ export interface RowOptions {
   valueGrowthPct: number;
   /** ersetzt die Monatsmiete in Jahr 1 (für die Break-even-Suche) */
   rentOverride?: number;
+  /** Anlaufzeit ohne Miete ignorieren (Kennzahlen eines eingeschwungenen Jahres) */
+  ignoreStartDelay?: boolean;
 }
+
+/** Kosten, die steuerlich nicht abzugsfähig sind (Rücklage: erst bei tatsächlicher Ausgabe). */
+const NON_DEDUCTIBLE: CostKey[] = ['reserve'];
 
 export function vacancyRate(i: Inputs): number {
   const r = i.rental;
@@ -174,20 +249,31 @@ export function computeRows(
   const gCost = pct(r.growthMode === 'single' ? r.growthPct : r.costGrowthPct);
   const vac = vacancyRate(i);
   const taxRate = !i.excelLogic && i.tax.rentalTaxEnabled ? pct(i.tax.rentalTaxPct) : 0;
+  // Die Reducción gibt es nur im IRPF (Residenten), nicht im IRNR.
+  const taxFactor = taxRate * (1 - (i.tax.nonResident ? 0 : Math.min(1, Math.max(0, pct(i.tax.rentalReductionPct)))));
+  const delay = opts.ignoreStartDelay ? 0 : Math.max(0, r.startDelayMonths);
+  const depAnnual = i.excelLogic ? 0 : depreciation(i).annual;
   const price = i.purchase.price;
 
   const rows: YearRow[] = [];
   const nYears = Math.max(1, Math.ceil(horizon - 1e-9));
   let monthly = 0;
   let cum = 0;
+  let laterBase = 0;
 
   for (let y = 1; y <= nYears; y++) {
     const frac = Math.min(1, horizon - (y - 1));
     const manual = r.manualRent[y - 1];
     if (y === 1) monthly = opts.rentOverride ?? (manual != null ? manual : r.monthlyRent);
     else monthly = manual != null ? manual : monthly * (1 + gRent);
+    if (!r.enabled) monthly = 0;
 
-    const potentialRent = monthly * 12 * frac;
+    const startMonth = (y - 1) * 12;
+    const monthsInYear = frac * 12;
+    const rentedMonths = r.enabled ? Math.max(0, Math.min(monthsInYear, startMonth + monthsInYear - delay)) : 0;
+    const rentedShare = monthsInYear > 0 ? rentedMonths / monthsInYear : 0;
+
+    const potentialRent = monthly * rentedMonths;
     const effectiveRent = potentialRent * (1 - vac);
     const cf = Math.pow(1 + gCost, y - 1) * frac;
     const costs: CostBreakdown = {
@@ -205,14 +291,22 @@ export function computeRows(
     const opCosts = COST_KEYS.reduce((s, k) => s + costs[k], 0);
     const noi = effectiveRent - opCosts;
 
-    const startMonth = (y - 1) * 12;
-    const endMonth = Math.round(startMonth + frac * 12);
+    const endMonth = Math.round(startMonth + monthsInYear);
     const { interest, principal } = sumMonths(sched, startMonth + 1, endMonth);
     const balance = balanceAfter(sched, endMonth);
 
-    const tax = taxRate * Math.max(0, noi - interest);
-    const taxUnlevered = taxRate * Math.max(0, noi);
     const capex = i.renovation.later.filter((l) => l.year === y).reduce((s, l) => s + (l.amount || 0), 0);
+    laterBase += capex;
+    // Abzugsfähig nur, was auf die vermieteten Monate entfällt; Agentur und Instandhaltung hängen schon an der Miete.
+    const fixedDeductible = COST_KEYS
+      .filter((k) => k !== 'management' && k !== 'maintenance' && !NON_DEDUCTIBLE.includes(k))
+      .reduce((s, k) => s + costs[k], 0);
+    const deductible = costs.management + costs.maintenance + fixedDeductible * rentedShare;
+    const dep = i.excelLogic ? 0 : (depAnnual + laterBase * DEPRECIATION_RATE) * (rentedMonths / 12);
+    const taxBaseUnlevered = effectiveRent - deductible - dep;
+    const taxBase = taxBaseUnlevered - interest * rentedShare;
+    const tax = taxFactor * Math.max(0, taxBase);
+    const taxUnlevered = taxFactor * Math.max(0, taxBaseUnlevered);
     // Excel-Logik: Tilgung wird nicht abgezogen
     const cashflow = i.excelLogic ? noi - interest - capex : noi - interest - principal - tax - capex;
     cum += cashflow;
@@ -221,8 +315,8 @@ export function computeRows(
     const propertyValue = price * Math.pow(1 + pct(opts.valueGrowthPct), t);
     const debtService = interest + principal;
     rows.push({
-      year: y, fraction: frac, monthlyRent: monthly, potentialRent, vacancyLoss: potentialRent - effectiveRent, effectiveRent,
-      costs, opCosts, noi, interest, principal, debtService, tax, taxUnlevered, capex, cashflow, cumCashflow: cum,
+      year: y, fraction: frac, monthlyRent: monthly, rentedMonths, potentialRent, vacancyLoss: potentialRent - effectiveRent, effectiveRent,
+      costs, opCosts, noi, interest, principal, debtService, depreciation: dep, taxBase, tax, taxUnlevered, capex, cashflow, cumCashflow: cum,
       balance, propertyValue, equityInProperty: propertyValue - balance,
       ekReturn: safeDiv(noi - interest - tax, cap.equity * frac),
       gkReturn: safeDiv(noi - taxUnlevered, cap.totalInvestment * frac),
@@ -248,11 +342,12 @@ export interface BaseKpis {
 }
 
 export function year1Cashflow(i: Inputs, rent: number, sched = schedule(i), cap = capital(i)): number {
-  return computeRows(i, 1, { valueGrowthPct: 0, rentOverride: rent }, sched, cap)[0].cashflow;
+  return computeRows(i, 1, { valueGrowthPct: 0, rentOverride: rent, ignoreStartDelay: true }, sched, cap)[0].cashflow;
 }
 
 /** Monatliche Kaltmiete, bei der der Cashflow in Jahr 1 genau 0 ist. */
 export function breakEvenRent(i: Inputs, sched = schedule(i), cap = capital(i)): number | null {
+  if (!i.rental.enabled) return null;
   let lo = 0;
   let hi = Math.max(10000, i.rental.monthlyRent * 20);
   if (year1Cashflow(i, lo, sched, cap) >= 0) return 0;
@@ -269,14 +364,15 @@ export function baseKpis(i: Inputs): BaseKpis {
   const purchase = purchaseCosts(i);
   const cap = capital(i, purchase);
   const sched = schedule(i);
-  const year1 = computeRows(i, 1, { valueGrowthPct: 0 }, sched, cap)[0];
+  // Laufende Kennzahlen für ein volles Mietjahr; die Anlaufzeit zeigt die Jahrestabelle.
+  const year1 = computeRows(i, 1, { valueGrowthPct: 0, ignoreStartDelay: true }, sched, cap)[0];
   return {
     purchase,
     capital: cap,
     schedule: sched,
     monthlyPayment: sched.firstPayment,
     year1,
-    grossYield: safeDiv(i.rental.monthlyRent * 12, i.purchase.price),
+    grossYield: i.rental.enabled ? safeDiv(i.rental.monthlyRent * 12, i.purchase.price) : null,
     netYield: safeDiv(year1.noi, cap.totalInvestment),
     vacancyRate: vacancyRate(i),
     breakEvenRent: breakEvenRent(i, sched, cap),
@@ -369,7 +465,12 @@ export interface SaleResult {
   prepaymentPenalty: number;
   saleCosts: number;
   balance: number;
+  /** wirtschaftlicher Gewinn: Verkaufspreis − Verkaufskosten − Gesamtinvestition − Investitionen */
   capitalGain: number;
+  /** Summe der Abschreibungen; mindert die steuerlichen Anschaffungskosten */
+  accumulatedDepreciation: number;
+  /** steuerpflichtiger Gewinn = Gewinn + Abschreibungen */
+  taxableGain: number;
   capitalGainsTax: number;
   netProceeds: number;
   /** 3 %-Einbehalt durch den Käufer bei Nichtresidenten */
@@ -385,6 +486,9 @@ export interface SaleResult {
   irrEquity: number | null;
   irrTotal: number | null;
   multiple: number | null;
+  /** Mietgewinn, Verkaufsgewinn und Gesamtgewinn je Jahr in % des Eigenkapitals (ohne Zinseszins) */
+  rentalReturnPa: number | null;
+  saleReturnPa: number | null;
   profitPerYearOnEquity: number | null;
 }
 
@@ -414,13 +518,15 @@ export function saleCalculator(i: Inputs, key: ScenarioKey): SaleResult {
   const capexSum = rows.reduce((sum, r) => sum + r.capex, 0);
 
   const capitalGain = price - saleCosts - cap.totalInvestment - capexSum;
-  const capitalGainsTax = Math.max(0, capitalGain) * pct(i.tax.capitalGainsTaxPct);
-  const netProceeds = price - saleCosts - capitalGainsTax - balance;
+  const accumulatedDepreciation = rows.reduce((sum, r) => sum + r.depreciation, 0);
+  const taxableGain = capitalGain + accumulatedDepreciation;
+  const gainsTax = capitalGainsTax(i, taxableGain);
+  const netProceeds = price - saleCosts - gainsTax - balance;
   const retention = i.tax.nonResident ? price * NON_RESIDENT_RETENTION : 0;
 
   const sumCashflow = rows.reduce((sum, r) => sum + r.cashflow, 0);
   const rentalProfit = rows.reduce((sum, r) => sum + r.noi - r.interest - r.tax, 0);
-  const saleProfit = capitalGain - capitalGainsTax;
+  const saleProfit = capitalGain - gainsTax;
   const totalProfit = rentalProfit + saleProfit;
 
   const flows: Flow[] = [{ t: 0, amount: -cap.equity }];
@@ -432,8 +538,8 @@ export function saleCalculator(i: Inputs, key: ScenarioKey): SaleResult {
     gkFlows.push({ t, amount: r.noi - r.taxUnlevered - r.capex });
   }
   flows.push({ t: hold, amount: netProceeds });
-  const gkGain = price - saleCostsUnlevered - cap.totalInvestment - capexSum;
-  gkFlows.push({ t: hold, amount: price - saleCostsUnlevered - Math.max(0, gkGain) * pct(i.tax.capitalGainsTaxPct) });
+  const gkGain = price - saleCostsUnlevered - cap.totalInvestment - capexSum + accumulatedDepreciation;
+  gkFlows.push({ t: hold, amount: price - saleCostsUnlevered - capitalGainsTax(i, gkGain) });
 
   return {
     scenario: key,
@@ -445,10 +551,12 @@ export function saleCalculator(i: Inputs, key: ScenarioKey): SaleResult {
     saleCosts,
     balance,
     capitalGain,
-    capitalGainsTax,
+    accumulatedDepreciation,
+    taxableGain,
+    capitalGainsTax: gainsTax,
     netProceeds,
     retention,
-    retentionSettlement: i.tax.nonResident ? capitalGainsTax - retention : 0,
+    retentionSettlement: i.tax.nonResident ? gainsTax - retention : 0,
     cashAtClosing: price - retention - saleCosts - balance,
     sumCashflow,
     rentalProfit,
@@ -457,6 +565,8 @@ export function saleCalculator(i: Inputs, key: ScenarioKey): SaleResult {
     irrEquity: cap.equity > 0 ? irr(flows) : null,
     irrTotal: irr(gkFlows),
     multiple: safeDiv(cap.equity + totalProfit, cap.equity),
+    rentalReturnPa: safeDiv(rentalProfit / hold, cap.equity),
+    saleReturnPa: safeDiv(saleProfit / hold, cap.equity),
     profitPerYearOnEquity: safeDiv(totalProfit / hold, cap.equity),
   };
 }

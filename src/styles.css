@@ -622,6 +622,24 @@ button {
   font-family: var(--display);
   font-size: 16px;
 }
+/* Rechenweg in Zeilen, z. B. Abschreibung oder Steuer-Tramos */
+.calc-lines {
+  margin: 4px 0 0;
+  font-size: 13.5px;
+  color: var(--ink-2);
+}
+.calc-lines div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 0;
+}
+.calc-lines dd {
+  margin: 0;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 
 .note {
   margin: 0 0 12px;

@@ -83,7 +83,7 @@ function Shell({ store }: { store: Store }) {
           onChange={store.setCalc}
           options={[
             { value: 'rent', label: `A · ${t.app.calcRent}`, hint: t.app.calcRentHint },
-            { value: 'sale', label: `B · ${t.app.calcSale}`, hint: fill(t.app.calcSaleHint, { years: num(holdYears, holdYears % 1 ? 1 : 0) }) },
+            { value: 'sale', label: `B · ${t.app.calcSale}`, hint: fill(t.app.calcSaleHint, { months: num(holdYears * 12, 0) }) },
           ]}
         />
       </nav>

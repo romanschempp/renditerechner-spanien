@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  baseKpis, blai30, buildSchedule, capital, irr, purchaseCosts, rentCalculator, saleCalculator,
-  schedule, sensitivity, type Inputs,
+  baseKpis, blai30, buildSchedule, capital, computeRows, depreciation, irr, purchaseCosts, rentCalculator, saleCalculator,
+  savingsTax, schedule, sensitivity, type Inputs,
 } from './index';
 
 const near = (actual: number, expected: number, tol: number) =>
@@ -241,5 +241,154 @@ describe('Weitere Kennzahlen', () => {
     expect(rent.high!).toBeGreaterThan(rent.base!);
     expect(rate.high!).toBeLessThan(rate.base!);
     expect(price.high!).toBeLessThan(price.base!);
+  });
+});
+
+describe('Steuern: Abschreibung (Amortización 3 %)', () => {
+  /** Beispiel aus der Vorgabe: 300.000 €, Bodenanteil 30 %, keine Nebenkosten und Renovierung */
+  function example(): Inputs {
+    const i = blai30();
+    i.purchase.price = 300000;
+    i.purchase.costMode = 'quick';
+    i.purchase.quickCostsPct = 0;
+    i.renovation.items = [];
+    i.tax.landPct = 30;
+    return i;
+  }
+
+  it('300.000 € mit 30 % Boden → 210.000 € Gebäude → 6.300 € pro Jahr', () => {
+    const d = depreciation(example());
+    near(d.building, 210000, 1e-9);
+    near(d.annual, 6300, 1e-9);
+  });
+
+  it('höherer Katasterwert des Gebäudes gewinnt', () => {
+    const i = example();
+    i.tax.cadastralLand = 50000;
+    i.tax.cadastralBuilding = 250000;
+    const d = depreciation(i);
+    near(d.landShare, 50000 / 300000, 1e-12);
+    near(d.buildingFromCost, 250000, 1e-6);
+    i.tax.cadastralBuilding = 260000; // Kataster über den Kosten ohne Boden
+    near(depreciation(i).building, 260000, 1e-6);
+  });
+
+  it('Bodenanteil aus Katasterwerten, Anschaffungskosten inkl. Kaufsteuern, ohne Bankkosten', () => {
+    const i = blai30();
+    i.tax.cadastralLand = 30000;
+    i.tax.cadastralBuilding = 70000;
+    const d = depreciation(i);
+    const p = purchaseCosts(i);
+    near(d.acquisitionCost, 262900 + 26290 + 10000, 1e-6); // Preis + ITP + Anwalt; Gutachten/Bank sind Finanzierungskosten
+    near(d.base, d.acquisitionCost * 0.7 + p.renovation, 1e-6);
+  });
+
+  it('Steuerbasis = Miete − abzugsfähige Kosten − Zinsen − Abschreibung, Steuer = Satz × Basis', () => {
+    const i = blai30();
+    const y = baseKpis(i).year1;
+    const dep = depreciation(i).annual;
+    const deductible = y.opCosts - y.costs.reserve;
+    near(y.depreciation, dep, 1e-9);
+    near(y.taxBase, y.effectiveRent - deductible - y.interest - dep, 1e-9);
+    near(y.tax, 0.19 * Math.max(0, y.taxBase), 1e-9);
+  });
+
+  it('Reducción mindert nur bei Residenten', () => {
+    const i = blai30();
+    i.tax.rentalTaxPct = 30;
+    i.tax.rentalReductionPct = 50;
+    const y = baseKpis(i).year1;
+    near(y.tax, 0.3 * 0.5 * Math.max(0, y.taxBase), 1e-9);
+    i.tax.nonResident = true;
+    near(baseKpis(i).year1.tax, 0.3 * Math.max(0, y.taxBase), 1e-9);
+  });
+
+  it('negative Steuerbasis → keine Steuer', () => {
+    const i = blai30();
+    i.rental.monthlyRent = 600;
+    const y = baseKpis(i).year1;
+    expect(y.taxBase).toBeLessThan(0);
+    expect(y.tax).toBe(0);
+  });
+});
+
+describe('Vermietung: Anlaufzeit und „nicht vermieten“', () => {
+  it('3 Monate ohne Miete: Jahr 1 hat 9 Mietmonate, anteilige Abschreibung und Kosten', () => {
+    const i = blai30();
+    i.rental.startDelayMonths = 3;
+    const [y1, y2] = computeRows(i, 2, { valueGrowthPct: 0 });
+    near(y1.rentedMonths, 9, 1e-12);
+    near(y1.potentialRent, 1680 * 9, 1e-9);
+    near(y1.depreciation, depreciation(i).annual * 0.75, 1e-9);
+    near(y1.costs.ibi, 400, 1e-9); // IBI fällt trotzdem an …
+    const deductible = y1.costs.management + y1.costs.maintenance + (y1.costs.community + y1.costs.ibi) * 0.75;
+    near(y1.taxBase, y1.effectiveRent - deductible - y1.interest * 0.75 - y1.depreciation, 1e-9); // … abzugsfähig aber nur anteilig
+    near(y2.rentedMonths, 12, 1e-12);
+    // Laufende Kennzahlen zeigen ein volles Mietjahr
+    near(baseKpis(i).year1.potentialRent, 1680 * 12, 1e-9);
+  });
+
+  it('Anlaufzeit über ein Jahr hinaus', () => {
+    const i = blai30();
+    i.rental.startDelayMonths = 15;
+    const [y1, y2] = computeRows(i, 2, { valueGrowthPct: 0 });
+    expect(y1.rentedMonths).toBe(0);
+    expect(y1.tax).toBe(0);
+    expect(y1.depreciation).toBe(0);
+    near(y2.rentedMonths, 9, 1e-12);
+  });
+
+  it('nicht vermieten: keine Miete, keine Steuer, feste Kosten bleiben', () => {
+    const i = blai30();
+    i.rental.enabled = false;
+    const k = baseKpis(i);
+    expect(k.year1.effectiveRent).toBe(0);
+    expect(k.year1.tax).toBe(0);
+    expect(k.year1.depreciation).toBe(0);
+    near(k.year1.opCosts, 70 * 12 + 400, 1e-9);
+    expect(k.grossYield).toBeNull();
+    expect(k.breakEvenRent).toBeNull();
+    const s = saleCalculator(i, 'realistic');
+    expect(s.accumulatedDepreciation).toBe(0);
+    near(s.rentalProfit, s.rows.reduce((a, r) => a - r.opCosts - r.interest, 0), 1e-6);
+  });
+});
+
+describe('Steuern beim Verkauf: Sparbasis-Tramos', () => {
+  it('progressive Tramos 19/21/23/27/30 %', () => {
+    near(savingsTax(0), 0, 0);
+    near(savingsTax(-5000), 0, 0);
+    near(savingsTax(5000), 950, 1e-9);
+    near(savingsTax(6000), 1140, 1e-9);
+    near(savingsTax(50000), 1140 + 44000 * 0.21, 1e-9);
+    near(savingsTax(100000), 1140 + 9240 + 50000 * 0.23, 1e-9);
+    near(savingsTax(400000), 1140 + 9240 + 34500 + 27000 + 30000, 1e-9);
+  });
+
+  it('Gewinn + Abschreibungen wird progressiv versteuert', () => {
+    const i = blai30();
+    const s = saleCalculator(i, 'realistic');
+    const dep = s.rows.reduce((a, r) => a + r.depreciation, 0);
+    expect(dep).toBeGreaterThan(0);
+    near(s.accumulatedDepreciation, dep, 1e-9);
+    near(s.taxableGain, s.capitalGain + dep, 1e-9);
+    near(s.capitalGainsTax, savingsTax(s.taxableGain), 1e-9);
+    near(s.saleProfit, s.capitalGain - s.capitalGainsTax, 1e-9);
+  });
+
+  it('Nichtresident: pauschal 19 %', () => {
+    const i = blai30();
+    i.tax.nonResident = true;
+    const s = saleCalculator(i, 'realistic');
+    near(s.capitalGainsTax, s.taxableGain * 0.19, 1e-9);
+  });
+
+  it('Miet-, Verkaufs- und Gesamtrendite p. a. addieren sich', () => {
+    const i = blai30();
+    const s = saleCalculator(i, 'realistic');
+    const eq = capital(i).equity;
+    near(s.rentalReturnPa!, s.rentalProfit / 2.5 / eq, 1e-12);
+    near(s.saleReturnPa!, s.saleProfit / 2.5 / eq, 1e-12);
+    near(s.rentalReturnPa! + s.saleReturnPa!, s.profitPerYearOnEquity!, 1e-12);
   });
 });

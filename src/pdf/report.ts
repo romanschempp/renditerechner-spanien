@@ -1,7 +1,7 @@
 // PDF-Übersicht: eine A4-Seite mit den wichtigsten Zahlen, danach Grafiken und Jahresübersicht.
 // Wird erst beim Klick geladen (dynamischer Import), damit jsPDF nicht im Start-Bundle landet.
 import { jsPDF } from 'jspdf';
-import { REGIONS, type BaseKpis, type Inputs, type RentResult, type SaleResult, type YearRow } from '../engine';
+import { depreciation, REGIONS, type BaseKpis, type Inputs, type RentResult, type SaleResult, type YearRow } from '../engine';
 import type { I18n } from '../i18n';
 import type { Calc } from '../state/store';
 import { focusModel } from '../components/focus';
@@ -166,7 +166,7 @@ function pageOne(pen: Pen, d: ReportData) {
     calcName,
     `${t.purchase.price} ${eur(inputs.purchase.price)}`,
     REGIONS[inputs.purchase.region].name,
-    ...(sale ? [`${t.sale.hold} ${fill(t.pdf.termValue, { years: num(sale.holdYears, sale.holdYears % 1 ? 1 : 0) })}`] : []),
+    ...(sale ? [`${t.sale.hold} ${num(sale.holdYears * 12, 0)} ${t.units.months}`] : []),
   ].join(', ');
   pen.font(SANS, false, 9, INK3).text(sub, M, 43.5);
 
@@ -285,8 +285,13 @@ function assumptionRows(d: ReportData): Row[] {
     { label: t.purchase.totalAncillary, value: eur(d.kpis.purchase.ancillary) },
   ];
   if (d.kpis.purchase.renovation > 0) rows.push({ label: t.renovation.total, value: eur(d.kpis.purchase.renovation) });
-  rows.push({ label: t.rental.rent, value: eur(r.monthlyRent), note: t.units.perMonthShort });
-  rows.push({ label: t.rental.vacancy, value: r.vacancyMode === 'pct' ? pc(r.vacancyPct) : `${num(r.vacancyMonths, 1)} ${t.units.monthsShort}` });
+  if (r.enabled) {
+    rows.push({ label: t.rental.rent, value: eur(r.monthlyRent), note: t.units.perMonthShort });
+    if (r.startDelayMonths > 0) rows.push({ label: t.rental.startDelay, value: `${num(r.startDelayMonths, 0)} ${t.units.monthsShort}` });
+    rows.push({ label: t.rental.vacancy, value: r.vacancyMode === 'pct' ? pc(r.vacancyPct) : `${num(r.vacancyMonths, 1)} ${t.units.monthsShort}` });
+  } else {
+    rows.push({ label: t.rental.enabled, value: t.rental.notRented });
+  }
   rows.push({
     label: t.rental.growth,
     value: r.growthMode === 'single'
@@ -302,7 +307,9 @@ function assumptionRows(d: ReportData): Row[] {
       note: t.financing[f.repayment],
     });
   }
-  rows.push({ label: t.tax.rentalTax, value: tax.rentalTaxEnabled && !d.inputs.excelLogic ? pc(tax.rentalTaxPct) : t.common.off });
+  const taxOn = tax.rentalTaxEnabled && !d.inputs.excelLogic && r.enabled;
+  rows.push({ label: t.tax.irpfRate, value: taxOn ? pc(tax.rentalTaxPct) : t.common.off, note: taxOn && tax.rentalReductionPct > 0 && !tax.nonResident ? `− ${pc(tax.rentalReductionPct)}` : undefined });
+  if (r.enabled && !d.inputs.excelLogic) rows.push({ label: t.tax.depAnnual, value: eur(depreciation(d.inputs, d.kpis.purchase).annual) });
   if (d.calc === 'sale') rows.push({ label: t.sale.agent, value: pc(sale.agentPct) });
   return rows;
 }
@@ -342,7 +349,9 @@ function horizonRows(d: ReportData): Row[] {
     );
   } else if (s) {
     rows.push(
-      { label: t.results.salePrice, value: eur(s.salePrice) },
+      { label: t.results.rentalReturnPa, value: pct(s.rentalReturnPa), tone: s.rentalReturnPa },
+      { label: t.results.saleReturnPa, value: pct(s.saleReturnPa), tone: s.saleReturnPa },
+      { label: t.results.totalReturnPa, value: pct(s.profitPerYearOnEquity), tone: s.profitPerYearOnEquity },
       { label: t.results.netProceeds, value: eur(s.netProceeds) },
     );
   }
@@ -396,11 +405,13 @@ function scenarioTable(pen: Pen, d: ReportData, sales: SaleResult[], y: number):
   const lines: { label: string; get: (s: SaleResult) => number | null; isPct?: boolean; strong?: boolean; tone?: boolean }[] = [
     { label: t.results.salePrice, get: (s) => s.salePrice },
     { label: t.results.saleCosts, get: (s) => -s.saleCosts },
+    ...(sales[1].accumulatedDepreciation > 0 ? [{ label: t.results.taxableGain, get: (s: SaleResult) => s.taxableGain }] : []),
     { label: t.results.capitalGainsTax, get: (s) => -s.capitalGainsTax },
     { label: t.results.balance, get: (s) => -s.balance },
     { label: t.results.netProceeds, get: (s) => s.netProceeds, strong: true },
     { label: t.results.sumCashflow, get: (s) => s.sumCashflow, tone: true },
     { label: t.results.totalProfit, get: (s) => s.totalProfit, strong: true, tone: true },
+    { label: t.results.totalReturnPa, get: (s) => s.profitPerYearOnEquity, isPct: true, tone: true },
     { label: t.kpi.irr, get: (s) => s.irrEquity, isPct: true, tone: true },
     { label: t.kpi.irrTotal, get: (s) => s.irrTotal, isPct: true, tone: true },
   ];

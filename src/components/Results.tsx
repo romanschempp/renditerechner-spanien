@@ -161,6 +161,9 @@ function Overview({ kpis, computed }: { kpis: BaseKpis; computed: Computed }) {
   if (sale) {
     horizon.push(
       { key: 'profit', label: t.kpi.profit, value: eur(sale.totalProfit), sign: sale.totalProfit, info: join(fill(t.kpi.profitSubSale, { years: yearsTxt }) + '.', t.results.inflationHint) },
+      { key: 'rpa', label: t.results.rentalReturnPa, value: pct(sale.rentalReturnPa), sign: sale.rentalReturnPa, info: t.results.returnsPaHint },
+      { key: 'spa', label: t.results.saleReturnPa, value: pct(sale.saleReturnPa), sign: sale.saleReturnPa, info: t.results.returnsPaHint },
+      { key: 'tpa', label: t.results.totalReturnPa, value: pct(sale.profitPerYearOnEquity), sign: sale.profitPerYearOnEquity, info: t.results.returnsPaHint },
       { key: 'irr', label: t.kpi.irr, value: pct(sale.irrEquity), sign: sale.irrEquity, info: join(t.kpi.irrSub + '.', t.results.irrHint) },
       { key: 'irrgk', label: t.kpi.irrTotal, value: pct(sale.irrTotal), sign: sale.irrTotal, info: join(t.kpi.irrTotalSub + '.', t.results.opportunityHint) },
       { key: 'mult', label: t.kpi.multiple, value: sale.multiple == null ? '–' : `${num(sale.multiple, 2)}×` },
@@ -222,7 +225,7 @@ function SaleBreakdown({ sales, equity, nonResident }: { sales: SaleResult[]; eq
     { label: t.results.salePrice, get: (s) => s.salePrice },
     { label: t.results.saleCosts, get: (s) => -s.saleCosts, neg: true },
     ...(sales[1].prepaymentPenalty > 0 ? [{ label: t.results.prepayment, get: (s: SaleResult) => -s.prepaymentPenalty, neg: true }] : []),
-    { label: t.results.capitalGainsTax, get: (s) => -s.capitalGainsTax, neg: true },
+    { label: t.results.capitalGainsTax, get: (s) => -s.capitalGainsTax, neg: true, info: t.tax.gainsNote },
     { label: t.results.balance, get: (s) => -s.balance, neg: true },
     { label: t.results.netProceeds, get: (s) => s.netProceeds, strong: true },
     { label: t.results.sumCashflow, get: (s) => s.sumCashflow, sign: true },
@@ -231,6 +234,15 @@ function SaleBreakdown({ sales, equity, nonResident }: { sales: SaleResult[]; eq
     { label: t.results.saleProfit, get: (s) => s.saleProfit, sign: true, info: t.results.saleProfitHint },
     { label: t.results.rentalProfit, get: (s) => s.rentalProfit, sign: true, info: t.results.rentalProfitHint },
     { label: t.results.capitalGain, get: (s) => s.capitalGain, sign: true },
+    ...(sales[1].accumulatedDepreciation > 0
+      ? [
+          { label: t.results.accumulatedDepreciation, get: (s: SaleResult) => s.accumulatedDepreciation, info: t.results.accumulatedDepreciationHint },
+          { label: t.results.taxableGain, get: (s: SaleResult) => s.taxableGain, sign: true },
+        ]
+      : []),
+    { label: t.results.rentalReturnPa, get: (s) => s.rentalReturnPa, fmt: 'pct', sign: true, info: t.results.returnsPaHint },
+    { label: t.results.saleReturnPa, get: (s) => s.saleReturnPa, fmt: 'pct', sign: true, info: t.results.returnsPaHint },
+    { label: t.results.totalReturnPa, get: (s) => s.profitPerYearOnEquity, fmt: 'pct', sign: true, strong: true, info: t.results.returnsPaHint },
     { label: t.kpi.irr, get: (s) => s.irrEquity, fmt: 'pct', sign: true },
     { label: t.kpi.irrTotal, get: (s) => s.irrTotal, fmt: 'pct', sign: true },
   ];
@@ -312,6 +324,12 @@ function YearTable({ rows, excel, financed }: { rows: YearRow[]; excel: boolean;
           { key: 'pri', label: t.table.principal, get: (r: YearRow) => -r.principal },
         ]
       : []),
+    ...(excel
+      ? []
+      : [
+          { key: 'dep', label: t.table.depreciation, get: (r: YearRow) => -r.depreciation },
+          { key: 'tb', label: t.table.taxBase, get: (r: YearRow) => r.taxBase },
+        ]),
     { key: 'tax', label: t.table.tax, get: (r) => -r.tax },
     ...(rows.some((r) => r.capex > 0) ? [{ key: 'capex', label: t.table.capex, get: (r: YearRow) => -r.capex }] : []),
     { key: 'cf', label: excel ? t.table.excelYield : t.table.cashflow, get: (r) => r.cashflow, strong: true, sign: true },

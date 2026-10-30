@@ -1,5 +1,5 @@
 import {
-  annuityPayment, defaultHorizon, MAX_YEARS, RATES_AS_OF, REGION_CODES, REGIONS, SCENARIOS, salePrice,
+  annuityPayment, defaultHorizon, depreciation, MAX_YEARS, RATES_AS_OF, REGION_CODES, REGIONS, SAVINGS_BRACKETS, SCENARIOS, salePrice,
   type BaseKpis, type Inputs, type RegionCode,
 } from '../engine';
 import { useI18n } from '../i18n';
@@ -22,7 +22,7 @@ export function InputPanel({ inputs, setInputs, calc, kpis }: { inputs: Inputs; 
       <RenovationSection inputs={inputs} setInputs={setInputs} kpis={kpis} />
       <FinancingSection inputs={inputs} setInputs={setInputs} kpis={kpis} />
       <RentalSection inputs={inputs} setInputs={setInputs} kpis={kpis} />
-      <TaxSection inputs={inputs} setInputs={setInputs} />
+      <TaxSection inputs={inputs} setInputs={setInputs} kpis={kpis} calc={calc} />
       {calc === 'sale' ? <SaleSection inputs={inputs} setInputs={setInputs} /> : <RentOnlySection inputs={inputs} setInputs={setInputs} kpis={kpis} />}
     </div>
   );
@@ -376,8 +376,13 @@ function RentalSection({ inputs, setInputs, kpis }: P) {
   const years = 10;
 
   return (
-    <Section id="rental" title={t.rental.section} summary={`${eur(r.monthlyRent)}${t.units.perMonthShort}`}>
+    <Section id="rental" title={t.rental.section} summary={r.enabled ? `${eur(r.monthlyRent)}${t.units.perMonthShort}` : t.rental.notRented}>
+      <Switch checked={r.enabled} onChange={(v) => set({ enabled: v })} label={t.rental.enabled} />
+      {!r.enabled && <Note>{t.rental.disabledNote}</Note>}
+      {r.enabled && (
+      <>
       <NumberField label={t.rental.rent} value={r.monthlyRent} onChange={(v) => set({ monthlyRent: v })} unit={t.units.perMonth} min={0} wide info={t.rental.rentLawHint} />
+      <NumberField label={t.rental.startDelay} value={r.startDelayMonths} onChange={(v) => set({ startDelayMonths: Math.round(v) })} unit={t.units.months} min={0} max={MAX_YEARS * 12} digits={0} info={t.rental.startDelayHint} />
       <Switch
         checked={showManual}
         onChange={(v) => set({ manualRent: v ? Array.from({ length: years }, () => null) : [] })}
@@ -417,6 +422,8 @@ function RentalSection({ inputs, setInputs, kpis }: P) {
         <NumberField label={t.rental.management} value={r.managementPct} onChange={(v) => set({ managementPct: v })} unit="%" min={0} info={t.rental.pctOfRentHint} hint={eur(kpis.year1.costs.management)} />
         <NumberField label={t.rental.maintenance} value={r.maintenancePct} onChange={(v) => set({ maintenancePct: v })} unit="%" min={0} info={t.rental.pctOfRentHint} hint={eur(kpis.year1.costs.maintenance)} />
       </div>
+      </>
+      )}
 
       <h3 className="h3">{t.rental.fixedCosts}</h3>
       <div className="grid2">
@@ -446,20 +453,69 @@ function RentalSection({ inputs, setInputs, kpis }: P) {
 
 // ---------------------------------------------------------------- Steuern
 
-function TaxSection({ inputs, setInputs }: { inputs: Inputs; setInputs: SetInputs }) {
-  const { t } = useI18n();
+function TaxSection({ inputs, setInputs, kpis, calc }: P & { calc: Calc }) {
+  const { t, eur, pct, fill } = useI18n();
   const patch = useSetters(setInputs);
   const x = inputs.tax;
   const set = (part: Partial<Inputs['tax']>) => patch('tax', part);
+  const dep = depreciation(inputs, kpis.purchase);
+  const fromCadastral = x.cadastralLand + x.cadastralBuilding > 0;
+  const rate = (v: number) => pct(v, 0);
   return (
-    <Section id="tax" title={t.tax.section} summary={x.rentalTaxEnabled ? `${x.rentalTaxPct} % / ${x.capitalGainsTaxPct} %` : `— / ${x.capitalGainsTaxPct} %`}>
+    <Section id="tax" title={t.tax.section} summary={`${x.rentalTaxEnabled ? `${x.rentalTaxPct} %` : '—'} · ${t.tax.depreciation.split(' (')[0]} ${eur(dep.annual)}`}>
       <Note>{t.tax.info}</Note>
       {inputs.excelLogic && <Note tone="warn">{t.settings.excelActive}</Note>}
+
+      <h3 className="h3">{t.tax.rentalHead}</h3>
       <Switch checked={x.rentalTaxEnabled} onChange={(v) => set({ rentalTaxEnabled: v })} label={t.tax.rentalTax} info={t.tax.rentalTaxHint} />
       {x.rentalTaxEnabled && (
-        <NumberField label={t.tax.rentalTax} value={x.rentalTaxPct} onChange={(v) => set({ rentalTaxPct: v })} unit="%" min={0} max={100} />
+        <div className="grid2">
+          <NumberField label={t.tax.irpfRate} value={x.rentalTaxPct} onChange={(v) => set({ rentalTaxPct: v })} unit="%" min={0} max={100} info={t.tax.irpfRateHint} />
+          <NumberField label={t.tax.reduction} value={x.rentalReductionPct} onChange={(v) => set({ rentalReductionPct: v })} unit="%" min={0} max={100} info={t.tax.reductionHint} />
+        </div>
       )}
-      <NumberField label={t.tax.capitalGainsTax} value={x.capitalGainsTaxPct} onChange={(v) => set({ capitalGainsTaxPct: v })} unit="%" min={0} max={100} />
+
+      <h3 className="h3">
+        {t.tax.depreciation} <InfoTip text={t.tax.depreciationHint} />
+      </h3>
+      <div className="grid2">
+        <NumberField label={t.tax.cadastralBuilding} value={x.cadastralBuilding} onChange={(v) => set({ cadastralBuilding: v })} unit="€" min={0} info={t.tax.cadastralHint} />
+        <NumberField label={t.tax.cadastralLand} value={x.cadastralLand} onChange={(v) => set({ cadastralLand: v })} unit="€" min={0} info={t.tax.cadastralHint} />
+      </div>
+      {fromCadastral ? (
+        <p className="muted small">{fill(t.tax.landFromCadastral, { pct: pct(dep.landShare, 1) })}</p>
+      ) : (
+        <NumberField label={t.tax.landPct} value={x.landPct} onChange={(v) => set({ landPct: v })} unit="%" min={0} max={100} info={t.tax.landPctHint} />
+      )}
+      <dl className="calc-lines">
+        <div><dt>{t.tax.depAcquisition}</dt><dd>{eur(dep.acquisitionCost)}</dd></div>
+        <div><dt>− {t.tax.depLand} ({pct(dep.landShare, 1)})</dt><dd>{eur(-(dep.acquisitionCost - dep.buildingFromCost))}</dd></div>
+        <div><dt>{t.tax.depBuilding}</dt><dd>{eur(dep.building)}</dd></div>
+        {dep.renovation > 0 && <div><dt>+ {t.tax.depRenovation}</dt><dd>{eur(dep.renovation)}</dd></div>}
+        <div><dt>{t.tax.depBase}</dt><dd>{eur(dep.base)}</dd></div>
+      </dl>
+      <Total label={t.tax.depAnnual} value={eur(dep.annual)} />
+
+      {calc === 'sale' && (
+        <>
+          <h3 className="h3">{t.tax.gainsHead}</h3>
+          {x.nonResident ? (
+            <p className="muted small">{t.tax.gainsNonResident}</p>
+          ) : (
+            <>
+              <p className="muted small">{t.tax.gainsInfo}</p>
+              <dl className="calc-lines">
+                {SAVINGS_BRACKETS.map((b, idx) => {
+                  const lower = idx === 0 ? 0 : SAVINGS_BRACKETS[idx - 1].upTo;
+                  const label = isFinite(b.upTo) ? fill(t.tax.bracketUpTo, { v: eur(b.upTo) }) : fill(t.tax.bracketAbove, { v: eur(lower) });
+                  return <div key={b.upTo}><dt>{label}</dt><dd>{rate(b.rate)}</dd></div>;
+                })}
+              </dl>
+            </>
+          )}
+          <p className="muted small">{t.tax.gainsNote}</p>
+        </>
+      )}
       <Switch checked={x.nonResident} onChange={(v) => set({ nonResident: v })} label={t.tax.nonResident} info={t.tax.nonResidentHint} />
       <ul className="checks">
         <li>{t.tax.residenceHint}</li>
@@ -472,7 +528,7 @@ function TaxSection({ inputs, setInputs }: { inputs: Inputs; setInputs: SetInput
 // ---------------------------------------------------------------- Verkauf (Rechner B)
 
 function SaleSection({ inputs, setInputs }: { inputs: Inputs; setInputs: SetInputs }) {
-  const { t, eur, num } = useI18n();
+  const { t, eur, num, fill } = useI18n();
   const patch = useSetters(setInputs);
   const s = inputs.sale;
   const set = (part: Partial<Inputs['sale']>) => patch('sale', part);
@@ -480,8 +536,9 @@ function SaleSection({ inputs, setInputs }: { inputs: Inputs; setInputs: SetInpu
     set({ scenarios: { ...s.scenarios, [key]: { ...s.scenarios[key], ...part } } });
 
   return (
-    <Section id="sale" title={t.sale.section} summary={`${num(s.holdYears, 2)} ${t.units.years} · ${eur(salePrice(inputs, 'realistic'))}`}>
-      <NumberField label={t.sale.hold} value={s.holdYears} onChange={(v) => set({ holdYears: v })} unit={t.units.years} min={0.1} max={MAX_YEARS} digits={2} wide />
+    <Section id="sale" title={t.sale.section} summary={`${num(s.holdYears * 12, 0)} ${t.units.months} · ${eur(salePrice(inputs, 'realistic'))}`}>
+      <NumberField label={t.sale.hold} value={Math.round(s.holdYears * 12)} onChange={(v) => set({ holdYears: Math.max(1, Math.round(v)) / 12 })} unit={t.units.months} min={1} max={MAX_YEARS * 12} digits={0} wide
+        hint={fill(t.sale.holdHint, { years: num(s.holdYears, s.holdYears % 1 ? 2 : 0) })} />
       <div className="subhead">
         <span>{t.sale.priceMode} <InfoTip text={t.sale.scenarioHint} /></span>
         <Segmented size="sm" label={t.sale.priceMode} value={s.priceMode} onChange={(v) => set({ priceMode: v })}
