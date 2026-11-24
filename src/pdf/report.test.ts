@@ -34,6 +34,15 @@ describe('PDF-Übersicht', () => {
     }
   }
 
+  it('Katalonien progressiv: ITP mit Spanne und effektivem Satz', async () => {
+    const d = data('de', 'rent', (i) => { i.purchase.price = 1000000; });
+    const doc = await buildPdf(d, fonts);
+    const text = new TextDecoder('latin1').decode(doc.output('arraybuffer'));
+    expect(doc.getNumberOfPages()).toBeGreaterThanOrEqual(2);
+    expect(d.kpis.purchase.itp).toBeCloseTo(105000, 6);
+    expect(text.length).toBeGreaterThan(0);
+  });
+
   it('ohne Kredit', async () => {
     const doc = await buildPdf(
       data('de', 'rent', (i) => {

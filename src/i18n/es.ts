@@ -73,6 +73,10 @@ export const es: Dict = {
     ratesHint:
       'Tipo general de la comunidad, a {date}. Muchas comunidades aplican tramos según el precio o tipos reducidos: verifíquelo y sobrescríbalo si hace falta.',
     tieredHint: 'Esta comunidad aplica tramos según el precio; aquí figura el tipo inicial.',
+    progressiveHint: 'Tarifa progresiva, cada tipo solo sobre su tramo: {brackets}. Tipo efectivo {eff}.',
+    bracketUpTo: 'hasta',
+    bracketAbove: 'en adelante',
+    effective: 'efectivo',
     applyRegion: 'Aplicar el tipo de la comunidad',
     costs: 'Gastos de compra',
     quickCosts: 'Gastos de compra totales',

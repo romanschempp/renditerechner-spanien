@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  baseKpis, blai30, buildSchedule, capital, computeRows, depreciation, irr, purchaseCosts, rentCalculator, saleCalculator,
+  baseKpis, blai30, buildSchedule, capital, computeRows, depreciation, irr, itpAmount, itpIsProgressive, purchaseCosts, rentCalculator, saleCalculator,
   savingsTax, schedule, sensitivity, type Inputs,
 } from './index';
 
@@ -390,5 +390,53 @@ describe('Steuern beim Verkauf: Sparbasis-Tramos', () => {
     near(s.rentalReturnPa!, s.rentalProfit / 2.5 / eq, 1e-12);
     near(s.saleReturnPa!, s.saleProfit / 2.5 / eq, 1e-12);
     near(s.rentalReturnPa! + s.saleReturnPa!, s.profitPerYearOnEquity!, 1e-12);
+  });
+});
+
+describe('ITP Katalonien: progressiver Tarif 2026', () => {
+  const withPrice = (price: number, itpPct = 10): Inputs => {
+    const i = blai30();
+    i.purchase.price = price;
+    i.purchase.itpPct = itpPct;
+    return i;
+  };
+
+  it('Tramo-Funktion', () => {
+    near(itpAmount(262900, 'CT', 10), 26290, 1e-6);
+    near(itpAmount(600000, 'CT', 10), 60000, 1e-6);
+    near(itpAmount(700000, 'CT', 10), 60000 + 11000, 1e-6);
+    near(itpAmount(900000, 'CT', 10), 60000 + 33000, 1e-6);
+    near(itpAmount(1200000, 'CT', 10), 93000 + 36000, 1e-6);
+    near(itpAmount(1500000, 'CT', 10), 93000 + 72000, 1e-6);
+    near(itpAmount(2000000, 'CT', 10), 165000 + 65000, 1e-6);
+    expect(itpAmount(0, 'CT', 10)).toBe(0);
+  });
+
+  it('stetig an den Grenzen', () => {
+    for (const g of [600000, 900000, 1500000]) near(itpAmount(g + 1, 'CT', 10) - itpAmount(g, 'CT', 10), 0.11, 0.021);
+  });
+
+  it('überschriebener Satz gilt pauschal, andere Regionen unverändert', () => {
+    expect(itpIsProgressive('CT', 10)).toBe(true);
+    expect(itpIsProgressive('CT', 11)).toBe(false);
+    near(itpAmount(1000000, 'CT', 11), 110000, 1e-6);
+    near(itpAmount(1000000, 'MD', 6), 60000, 1e-6);
+    near(itpAmount(1000000, 'AN', 7), 70000, 1e-6);
+  });
+
+  it('fließt in Kaufnebenkosten und Gesamtinvestition', () => {
+    const p = purchaseCosts(withPrice(1000000));
+    near(p.itp, 60000 + 33000 + 12000, 1e-6);
+    near(p.totalInvestment, 1000000 + p.ancillary + p.renovation, 1e-6);
+    near(purchaseCosts(withPrice(1000000, 12)).itp, 120000, 1e-6);
+  });
+
+  it('Neubau und Schnellmodus unberührt', () => {
+    const n = withPrice(1000000);
+    n.purchase.propertyType = 'new';
+    expect(purchaseCosts(n).itp).toBe(0);
+    const q = withPrice(1000000);
+    q.purchase.costMode = 'quick';
+    near(purchaseCosts(q).ancillary, 120000, 1e-6);
   });
 });

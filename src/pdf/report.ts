@@ -1,7 +1,7 @@
 // PDF-Übersicht: eine A4-Seite mit den wichtigsten Zahlen, danach Grafiken und Jahresübersicht.
 // Wird erst beim Klick geladen (dynamischer Import), damit jsPDF nicht im Start-Bundle landet.
 import { jsPDF } from 'jspdf';
-import { depreciation, REGIONS, type BaseKpis, type Inputs, type RentResult, type SaleResult, type YearRow } from '../engine';
+import { depreciation, itpIsProgressive, itpTopRate, REGIONS, type BaseKpis, type Inputs, type RentResult, type SaleResult, type YearRow } from '../engine';
 import type { I18n } from '../i18n';
 import type { Calc } from '../state/store';
 import { focusModel } from '../components/focus';
@@ -281,7 +281,9 @@ function assumptionRows(d: ReportData): Row[] {
   const { purchase: p, rental: r, financing: f, tax, sale } = d.inputs;
   const pc = (v: number, digits = 1) => `${num(v, v % 1 ? digits : 0)} %`;
   const rows: Row[] = [
-    { label: t.purchase.region, value: REGIONS[p.region].name, note: `ITP ${pc(p.itpPct)}` },
+    { label: t.purchase.region, value: REGIONS[p.region].name, note: p.propertyType === 'used' && p.costMode === 'detail' && itpIsProgressive(p.region, p.itpPct) && p.price > 0
+      ? `ITP ${num(p.itpPct, 0)}–${pc(itpTopRate(p.region))} (${t.purchase.effective} ${pc((d.kpis.purchase.itp / p.price) * 100, 2)})`
+      : `ITP ${pc(p.itpPct)}` },
     { label: t.purchase.totalAncillary, value: eur(d.kpis.purchase.ancillary) },
   ];
   if (d.kpis.purchase.renovation > 0) rows.push({ label: t.renovation.total, value: eur(d.kpis.purchase.renovation) });

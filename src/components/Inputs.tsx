@@ -1,5 +1,5 @@
 import {
-  annuityPayment, defaultHorizon, depreciation, MAX_YEARS, RATES_AS_OF, REGION_CODES, REGIONS, SAVINGS_BRACKETS, SCENARIOS, salePrice,
+  annuityPayment, defaultHorizon, depreciation, itpIsProgressive, itpTopRate, MAX_YEARS, RATES_AS_OF, REGION_CODES, REGIONS, SAVINGS_BRACKETS, SCENARIOS, salePrice,
   type BaseKpis, type Inputs, type RegionCode,
 } from '../engine';
 import { useI18n } from '../i18n';
@@ -37,7 +37,7 @@ interface P {
 // ---------------------------------------------------------------- Kauf
 
 function PurchaseSection({ inputs, setInputs, kpis }: P) {
-  const { t, eur, fill } = useI18n();
+  const { t, eur, num, fill } = useI18n();
   const patch = useSetters(setInputs);
   const p = inputs.purchase;
   const region = REGIONS[p.region];
@@ -47,6 +47,12 @@ function PurchaseSection({ inputs, setInputs, kpis }: P) {
     { key: 'bankFees' }, { key: 'buyerAgent' }, { key: 'lifeInsurance' }, { key: 'other' },
   ];
   const ratesHint = fill(t.purchase.ratesHint, { date: RATES_AS_OF });
+  const itpLabel = (c: RegionCode) => (REGIONS[c].itpBrackets ? `${REGIONS[c].itp}–${itpTopRate(c)} %` : `${REGIONS[c].itp} %`);
+  const progressive = p.propertyType === 'used' && itpIsProgressive(p.region, p.itpPct);
+  const itpEff = p.price > 0 ? `${num((kpis.purchase.itp / p.price) * 100, 2)} %` : '–';
+  const bracketText = (region.itpBrackets ?? [])
+    .map((b) => (Number.isFinite(b.upTo) ? `${b.rate} % ${t.purchase.bracketUpTo} ${eur(b.upTo)}` : `${b.rate} % ${t.purchase.bracketAbove}`))
+    .join(', ');
 
   return (
     <Section id="purchase" title={t.purchase.section} summary={eur(p.price + kpis.purchase.ancillary)}>
@@ -63,7 +69,7 @@ function PurchaseSection({ inputs, setInputs, kpis }: P) {
         label={t.purchase.region}
         value={p.region}
         onChange={(code) => set({ region: code, itpPct: REGIONS[code].itp, ajdPct: REGIONS[code].ajd })}
-        options={REGION_CODES.map((c) => ({ value: c, label: `${REGIONS[c].name} · ITP ${REGIONS[c].itp} %` }))}
+        options={REGION_CODES.map((c) => ({ value: c, label: `${REGIONS[c].name} · ITP ${itpLabel(c)}` }))}
       />
 
       <div className="subhead">
@@ -91,7 +97,7 @@ function PurchaseSection({ inputs, setInputs, kpis }: P) {
         <>
           <div className="grid2">
             {p.propertyType === 'used' ? (
-              <NumberField label={t.purchase.itp} value={p.itpPct} onChange={(v) => set({ itpPct: v })} unit="%" min={0} info={ratesHint} hint={eur(kpis.purchase.itp)} />
+              <NumberField label={t.purchase.itp} value={p.itpPct} onChange={(v) => set({ itpPct: v })} unit="%" min={0} info={ratesHint} hint={progressive ? `${eur(kpis.purchase.itp)} · ${t.purchase.effective} ${itpEff}` : eur(kpis.purchase.itp)} />
             ) : (
               <>
                 <NumberField label={t.purchase.iva} value={p.ivaPct} onChange={(v) => set({ ivaPct: v })} unit="%" min={0} hint={eur(kpis.purchase.iva)} />
@@ -101,12 +107,14 @@ function PurchaseSection({ inputs, setInputs, kpis }: P) {
           </div>
           {(p.propertyType === 'used' ? p.itpPct !== region.itp : p.ajdPct !== region.ajd) ? (
             <button type="button" className="link" onClick={() => set({ itpPct: region.itp, ajdPct: region.ajd })}>
-              {t.purchase.applyRegion} ({region.name}: {p.propertyType === 'used' ? `ITP ${region.itp} %` : `AJD ${region.ajd} %`})
+              {t.purchase.applyRegion} ({region.name}: {p.propertyType === 'used' ? `ITP ${itpLabel(p.region)}` : `AJD ${region.ajd} %`})
             </button>
           ) : (
             <Note>
               {region.name}, {t.common.pleaseCheck} · {RATES_AS_OF}
-              {region.tiered ? ` · ${t.purchase.tieredHint}` : ''}
+              {progressive
+                ? ` · ${fill(t.purchase.progressiveHint, { brackets: bracketText, eff: itpEff })}`
+                : region.tiered && !region.itpBrackets ? ` · ${t.purchase.tieredHint}` : ''}
             </Note>
           )}
           <div className="grid2">

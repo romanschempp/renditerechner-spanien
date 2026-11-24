@@ -71,6 +71,10 @@ export const de = {
     ratesHint:
       'Allgemeiner Satz der Region, Stand {date}. Viele Regionen staffeln nach Kaufpreis oder haben Ermäßigungen – bitte prüfen und bei Bedarf überschreiben.',
     tieredHint: 'Diese Region staffelt den Satz nach Kaufpreis; hier ist der Eingangssatz hinterlegt.',
+    progressiveHint: 'Progressiver Tarif, jeder Satz nur auf seinen Anteil: {brackets}. Effektiv {eff}.',
+    bracketUpTo: 'bis',
+    bracketAbove: 'darüber',
+    effective: 'effektiv',
     applyRegion: 'Satz der Region übernehmen',
     costs: 'Kaufnebenkosten',
     quickCosts: 'Kaufnebenkosten gesamt',

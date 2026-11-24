@@ -1,5 +1,6 @@
 import { irr, type Flow } from './irr';
 import { balanceAfter, buildSchedule, rateFunction, sumMonths, type LoanSchedule } from './loan';
+import { itpAmount } from './regions';
 import type { Inputs, ScenarioKey } from './types';
 
 /** Gesetzlich fester Einbehalt durch den Käufer bei Verkauf durch Nichtresidenten. */
@@ -81,7 +82,7 @@ export function purchaseCosts(i: Inputs): PurchaseBreakdown {
     };
   }
 
-  const itp = p.propertyType === 'used' ? p.price * pct(p.itpPct) : 0;
+  const itp = p.propertyType === 'used' ? itpAmount(p.price, p.region, p.itpPct) : 0;
   const iva = p.propertyType === 'new' ? p.price * pct(p.ivaPct) : 0;
   const ajd = p.propertyType === 'new' ? p.price * pct(p.ajdPct) : 0;
   const fees = {
